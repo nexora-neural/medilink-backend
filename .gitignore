@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+firebase-service-account*.json
+service-account*.json
+
+# Local data and uploads
+data/
+uploads/
+*.sqlite3
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/

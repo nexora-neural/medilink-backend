@@ -1,0 +1,1 @@
+"""Private document handling module."""
