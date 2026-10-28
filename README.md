@@ -108,6 +108,7 @@ python -m app.database.create_tables
 
 - Copy `.env.example` to `.env` for local settings. `.env` is ignored by Git.
 - Set `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` in `.env`; the app loads these separately and safely assembles the asyncpg connection. Optional pool settings are `DB_POOL_SIZE` and `DB_MAX_OVERFLOW`.
+- Set `CORS_ORIGINS` to a JSON array of exact browser origins, for example `["http://localhost:4200"]`. The backend permits the `Authorization`, `Accept`, and `Content-Type` headers and does not allow cookie credentials.
 - Provide Firebase Admin credentials through `GOOGLE_APPLICATION_CREDENTIALS` in the local shell. Do not place service-account JSON files in the repository.
 - The backend must verify Firebase ID tokens and make its own role, ownership, organization, consent, expiry, and record-status decisions. Firebase login alone does not grant access to medical records.
 - Store uploaded files in private storage, outside the public/static directory. File authorization must be enforced by the backend.
