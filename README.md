@@ -63,6 +63,19 @@ prescriptions/
 └── service.py      # Feature rules and orchestration
 ```
 
+## Repeatable quality checks
+
+Install the pinned development dependencies from the backend repository root:
+
+    python -m pip install -r requirements-dev.lock
+
+Then run lint and API checks:
+
+    ruff check .
+    python -m unittest discover -s tests -v
+
+The API tests use synthetic async database-check fixtures. They do not start the application lifespan, connect to PostgreSQL, or use real health data. A failing synthetic database check is expected to produce HTTP 500, and the test runner exits non-zero if an assertion fails.
+
 ## Local setup
 
 Prerequisites: Python 3.13.13, PostgreSQL 18, Redis OSS 7.4, and Git. Install and run PostgreSQL and Redis using the method already used by your team.

@@ -4,3 +4,7 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Importing domain models registers them with SQLAlchemy metadata.
+"app/main.py" = ["F401"]
