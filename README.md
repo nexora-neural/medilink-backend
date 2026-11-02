@@ -20,7 +20,7 @@ FastAPI backend starter for the MediLink academic project. The starter follows t
 
 Backend runtime and development locks pin all Python packages. The frontend lock file pins its complete npm dependency tree. Install from these lock files for reproducible setup; the unpinned requirement files are dependency inputs, not the installation source.
 
-Alembic is intentionally not included in this starter, following the team's current decision. ORM models do not automatically update an existing database. At API startup, `Base.metadata.create_all()` creates missing tables for registered models; it does not create the PostgreSQL database itself or alter existing tables.
+Alembic manages database schema revisions. Configure the local PostgreSQL settings in `.env`, create an empty database, and run `python -m alembic upgrade head`. At startup, the application checks database connectivity. Use Alembic migrations to create and change tables; application startup does not create schema objects.
 
 ## Project layout
 
@@ -109,13 +109,15 @@ Prerequisites: Python 3.13.13, PostgreSQL 18, Redis OSS 7.4, and Git. Install an
 
 ## Database table setup
 
-The API follows the class-project startup pattern: FastAPI calls `init_db()` at startup and closes the engine on shutdown. Once SQLAlchemy models have been implemented and imported, the startup step creates their missing tables. A manual setup command is also available from this directory:
+Apply migrations from the backend repository root after creating an empty local PostgreSQL database and setting its connection details in `.env`:
 
 ```bash
-python -m app.database.create_tables
+python -m alembic upgrade head
+python -m alembic current
+python -m alembic heads
 ```
 
-`create_all()` does not update existing tables when a model changes. Developers must coordinate later schema changes and keep the database structure and ORM models in sync. At this scaffold stage, MediLink domain ORM models are not yet implemented or imported, so startup creates no domain tables. Do not use real patient data in local development or demos.
+The initial revision is an empty baseline because the current model modules contain no mapped domain tables. Future model changes require reviewed migration revisions. For a database previously populated by `create_all()`, compare its schema and decide on a migration strategy before applying or stamping revisions; do not assume it matches. Do not use real patient data in local development or demos.
 
 ## Configuration and credentials
 

@@ -6,8 +6,6 @@ from sqlalchemy import text
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.database.base import Base
-
 load_dotenv()
 
 DB_HOST = os.getenv("DB_HOST", "localhost")
@@ -49,9 +47,8 @@ async def get_session() -> AsyncIterator[AsyncSession]:
 
 
 async def init_db() -> None:
-    """Create missing tables for registered ORM models."""
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
+    """Verify database connectivity during application startup."""
+    await check_database_connection()
 
 
 async def close_db() -> None:
