@@ -19,3 +19,4 @@ from app.modules.vaccinations import models as _vaccinations_models
 from app.modules.verification import models as _verification_models
 
 from app.modules.identity.models import Role, User, UserRole
+from app.modules.organizations.models import Organization, OrganizationMembership
