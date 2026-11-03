@@ -17,3 +17,5 @@ from app.modules.prescriptions import models as _prescriptions_models
 from app.modules.profiles import models as _profiles_models
 from app.modules.vaccinations import models as _vaccinations_models
 from app.modules.verification import models as _verification_models
+
+from app.modules.identity.models import Role, User, UserRole
