@@ -6,8 +6,8 @@ from sqlalchemy.dialects.postgresql import ENUM
 
 
 class AccountStatus(str, Enum):
-    PENDING = "pending"
     ACTIVE = "active"
+    PENDING = "pending"
     SUSPENDED = "suspended"
     DISABLED = "disabled"
 

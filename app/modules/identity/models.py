@@ -45,7 +45,10 @@ class User(Base):
 
 
 # Matches the ER diagram: unique lower(email), allowing multiple NULL emails.
-Index("uq_users_email_ci", func.lower(User.email), unique=True)
+Index(
+    "uq_users_email_ci", func.lower(User.email), unique=True,
+    postgresql_where=User.email.is_not(None),
+)
 
 
 class Role(Base):
@@ -56,7 +59,7 @@ class Role(Base):
         UniqueConstraint("label", name="roles_label_key"),
         CheckConstraint(
             "code IN ('patient', 'doctor', 'pharmacist', "
-            "'lab_staff', 'admin', 'super_admin')", name="ck_roles_code",
+            "'lab_staff', 'admin', 'super_admin')", name="code",
         ),
     )
 
