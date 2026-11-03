@@ -34,7 +34,6 @@ account_status_type = ENUM(
     values_callable=lambda enum_class: [
         member.value for member in enum_class
     ],
-    create_type=False,
     validate_strings=True,
 )
 
@@ -44,7 +43,6 @@ professional_role_type = ENUM(
     values_callable=lambda enum_class: [
         member.value for member in enum_class
     ],
-    create_type=False,
     validate_strings=True,
 )
 
@@ -54,6 +52,5 @@ verification_status_type = ENUM(
     values_callable=lambda enum_class: [
         member.value for member in enum_class
     ],
-    create_type=False,
     validate_strings=True,
 )
