@@ -1,6 +1,7 @@
 import asyncio
 from logging.config import fileConfig
 
+import alembic_postgresql_enum
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -25,6 +26,9 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
+alembic_postgresql_enum.set_configuration(
+    alembic_postgresql_enum.Config(drop_unused_enums=False)
+)
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,

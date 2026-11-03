@@ -135,3 +135,7 @@ The initial revision is an empty baseline because the current model modules cont
 3. Use feature branches and pull requests. Review API-contract and database changes with the relevant team members before merging.
 4. Add a license only after the project owner/team chooses one; this starter does not assume a license.
 
+
+### PostgreSQL enum migrations
+
+Register models in `app/database/models.py` and generate revisions with `python -m alembic revision --autogenerate -m "describe change"` against an up-to-date development database. The Alembic PostgreSQL enum extension generates enum changes for new revisions; it does not repair existing revisions. For newly declared PostgreSQL enums, omit `create_type=False` in the model: the extension adds it to generated migrations. With extension version 1.11.0, explicitly setting it on the model can generate a duplicate keyword and invalid Python. Unused enum types are not automatically dropped. Review generated revisions, especially shared enums and value changes, and verify upgrade and downgrade on a disposable PostgreSQL database before merging.
