@@ -6,6 +6,8 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.identity.models import Role, UserRole
+from app.modules.organizations.models import OrganizationMembership
 from app.modules.profiles.models import PatientProfile
 from app.modules.profiles.schemas import PatientProfileUpdateRequest
 
@@ -14,7 +16,8 @@ async def get_patient_profile(
     session: AsyncSession,
     user_id: UUID,
     for_update: bool = False,
-):
+) -> PatientProfile | None:
+    """Return the patient's profile, locking the row if requested."""
     query = select(PatientProfile).where(PatientProfile.user_id == user_id)
 
     if for_update:
@@ -29,7 +32,8 @@ async def create_patient_profile(
     user_id: UUID,
     date_of_birth: date,
     sex: str,
-):
+) -> PatientProfile:
+    """Add a patient profile to the current transaction."""
     profile = PatientProfile(
         user_id=user_id,
         date_of_birth=date_of_birth,
@@ -45,7 +49,8 @@ async def update_patient_profile(
     session: AsyncSession,
     profile: PatientProfile,
     data: PatientProfileUpdateRequest,
-):
+) -> PatientProfile:
+    """Apply the supplied profile fields in the current transaction."""
     changes = data.model_dump(exclude_unset=True)
     editable_fields = (
         "date_of_birth",
@@ -66,3 +71,31 @@ async def update_patient_profile(
     await session.flush()
     await session.refresh(profile)
     return profile
+
+
+async def get_user_role_codes(
+    session: AsyncSession,
+    user_id: UUID,
+) -> list[str]:
+    """Return the role codes assigned to the given user."""
+    query = (
+        select(Role.code)
+        .join(UserRole, UserRole.role_id == Role.id)
+        .where(UserRole.user_id == user_id)
+        .order_by(Role.code)
+    )
+    result = await session.scalars(query)
+    return list(result.all())
+
+async def get_user_memberships(
+    session: AsyncSession,
+    user_id: UUID,
+) -> list[OrganizationMembership]:
+    """Return the organization memberships for the given user."""
+    query = (
+        select(OrganizationMembership)
+        .where(OrganizationMembership.user_id == user_id)
+        .order_by(OrganizationMembership.created_at, OrganizationMembership.id)
+    )
+    result = await session.scalars(query)
+    return list(result.all())
