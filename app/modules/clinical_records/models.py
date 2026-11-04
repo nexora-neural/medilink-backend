@@ -1,7 +1,9 @@
-"""SQLAlchemy ORM models for clinical records."""
-"""SQLAlchemy models for clinical records."""
 
-from enum import Enum as PyEnum
+"""SQLAlchemy ORM models for clinical records."""
+
+from datetime import datetime
+from enum import StrEnum
+from uuid import UUID
 
 from sqlalchemy import (
     CheckConstraint,
@@ -12,14 +14,14 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.schema import conv
 
 from app.database.base import Base
 
 
-class RecordSource(str, PyEnum):
+class RecordSource(StrEnum):
     PATIENT = "patient"
     DOCTOR = "doctor"
     PHARMACIST = "pharmacist"
@@ -28,7 +30,7 @@ class RecordSource(str, PyEnum):
     ADMIN = "admin"
 
 
-class ClinicalRecordStatus(str, PyEnum):
+class ClinicalRecordStatus(StrEnum):
     ACTIVE = "active"
     ENTERED_IN_ERROR = "entered_in_error"
     SUPERSEDED = "superseded"
@@ -50,19 +52,19 @@ clinical_record_status_enum = Enum(
 
 class ClinicalRecordMixin:
     id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True),
+        PG_UUID(as_uuid=True),
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
 
     patient_user_id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True),
+        PG_UUID(as_uuid=True),
         ForeignKey("patient_profiles.user_id", ondelete="RESTRICT"),
         nullable=False,
     )
 
     consultation_id: Mapped[UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+        PG_UUID(as_uuid=True),
         ForeignKey("consultations.id", ondelete="RESTRICT"),
     )
 
@@ -72,13 +74,13 @@ class ClinicalRecordMixin:
     )
 
     recorded_by: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True),
+        PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
     )
 
     organization_id: Mapped[UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+        PG_UUID(as_uuid=True),
         ForeignKey("organizations.id", ondelete="RESTRICT"),
     )
 
@@ -88,7 +90,12 @@ class ClinicalRecordMixin:
         server_default=text("'active'"),
     )
 
-    created_at: Mapped[object] = mapped_column(
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=text("now()"),
@@ -121,13 +128,8 @@ class ConditionsModel(ClinicalRecordMixin, Base):
     clinical_code: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
 
-    recorded_at: Mapped[object] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-    )
-
     supersedes_id: Mapped[UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+        PG_UUID(as_uuid=True),
         ForeignKey("conditions.id", ondelete="RESTRICT"),
     )
 
@@ -143,7 +145,7 @@ class DiagnosesModel(ClinicalRecordMixin, Base):
         Index(
             "ix_diagnoses_patient_date",
             "patient_user_id",
-            text("diagnosed_at DESC"),
+            text("recorded_at DESC"),
         ),
         Index(
             "ix_diagnoses_consultation",
@@ -156,13 +158,13 @@ class DiagnosesModel(ClinicalRecordMixin, Base):
     clinical_code: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
 
-    diagnosed_at: Mapped[object] = mapped_column(
+    diagnosed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
     )
 
     supersedes_id: Mapped[UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+        PG_UUID(as_uuid=True),
         ForeignKey("diagnoses.id", ondelete="RESTRICT"),
     )
 
@@ -191,13 +193,8 @@ class AllergiesModel(ClinicalRecordMixin, Base):
     reaction: Mapped[str | None] = mapped_column(Text)
     severity: Mapped[str | None] = mapped_column(Text)
 
-    recorded_at: Mapped[object] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-    )
-
     supersedes_id: Mapped[UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+        PG_UUID(as_uuid=True),
         ForeignKey("allergies.id", ondelete="RESTRICT"),
     )
 
@@ -225,13 +222,8 @@ class ClinicalNotesModel(ClinicalRecordMixin, Base):
     note_type: Mapped[str] = mapped_column(Text, nullable=False)
     note_text: Mapped[str] = mapped_column(Text, nullable=False)
 
-    recorded_at: Mapped[object] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-    )
-
     supersedes_id: Mapped[UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+        PG_UUID(as_uuid=True),
         ForeignKey("clinical_notes.id", ondelete="RESTRICT"),
     )
 
@@ -279,33 +271,33 @@ class RecordCorrectionsModel(Base):
     )
 
     id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True),
+        PG_UUID(as_uuid=True),
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
 
     condition_id: Mapped[UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+        PG_UUID(as_uuid=True),
         ForeignKey("conditions.id", ondelete="RESTRICT"),
     )
 
     diagnosis_id: Mapped[UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+        PG_UUID(as_uuid=True),
         ForeignKey("diagnoses.id", ondelete="RESTRICT"),
     )
 
     allergy_id: Mapped[UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+        PG_UUID(as_uuid=True),
         ForeignKey("allergies.id", ondelete="RESTRICT"),
     )
 
     clinical_note_id: Mapped[UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+        PG_UUID(as_uuid=True),
         ForeignKey("clinical_notes.id", ondelete="RESTRICT"),
     )
 
     requested_by: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True),
+        PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
     )
@@ -319,11 +311,11 @@ class RecordCorrectionsModel(Base):
     )
 
     reviewed_by: Mapped[UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+        PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="RESTRICT"),
     )
 
-    reviewed_at: Mapped[object | None] = mapped_column(
+    reviewed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
     )
 
@@ -332,10 +324,10 @@ class RecordCorrectionsModel(Base):
     replacement_record_type: Mapped[str | None] = mapped_column(Text)
 
     replacement_record_id: Mapped[UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+        PG_UUID(as_uuid=True),
     )
 
-    created_at: Mapped[object] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=text("now()"),
