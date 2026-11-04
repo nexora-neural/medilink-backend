@@ -1,5 +1,6 @@
 """Business rules and orchestration for user profiles."""
 
+from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,7 @@ from app.modules.profiles.repository import (
     get_user_role_codes,
 )
 from app.modules.profiles.schemas import (
+    AccountUpdateRequest,
     MembershipResponse,
     MeResponse,
     PatientProfileResponse,
@@ -56,3 +58,28 @@ async def build_me_response(
             for membership in memberships
         ],
     )
+
+
+async def update_own_account(
+    session: AsyncSession,
+    user: User,
+    data: AccountUpdateRequest,
+    *,
+    write_audit: Callable[[AsyncSession, UUID, list[str]], Awaitable[None]],
+) -> None:
+    """Update account details and record changed fields in the same session."""
+    supplied_fields = data.model_dump(exclude_unset=True)
+    changed_fields: list[str] = []
+
+    for field in ("display_name", "phone"):
+        if field not in supplied_fields:
+            continue
+
+        value = supplied_fields[field]
+        if getattr(user, field) != value:
+            setattr(user, field, value)
+            changed_fields.append(field)
+
+    if changed_fields:
+        await write_audit(session, user.id, changed_fields)
+        await session.flush()
