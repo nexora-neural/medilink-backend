@@ -14,13 +14,12 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID, ENUM
+from sqlalchemy.dialects.postgresql import ENUM, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base
 
-from .enum import ScheduleStatus, DoseStatus, DoseResponse
-
+from .enum import DoseResponse, DoseStatus, ScheduleStatus
 
 # Reuse existing PostgreSQL enum types and store Python enum values.
 schedule_status_enum = ENUM(
@@ -167,6 +166,7 @@ class DoseOccurrence(Base):
             "ix_dose_occurrences_due",
             "status",
             "scheduled_for",
+            postgresql_where=text("status IN ('upcoming', 'due')"),
         ),
         Index(
             "ix_dose_occurrences_schedule",
@@ -217,19 +217,17 @@ class MedicationLog(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "(correction_of_id IS NULL) = "
-            "(correction_reason IS NULL)",
+            "(correction_of_id IS NULL) = (correction_reason IS NULL)",
             name="ck_medication_log_correction",
         ),
         CheckConstraint(
-            "response <> 'taken'::public.dose_response "
-            "OR reported_taken_at IS NOT NULL",
+            "response <> 'taken'::public.dose_response OR reported_taken_at IS NOT NULL",
             name="ck_medication_log_taken_time",
         ),
         Index(
             "ix_medication_logs_occurrence",
             "dose_occurrence_id",
-            "recorded_at",
+            text("recorded_at DESC"),
         ),
     )
 

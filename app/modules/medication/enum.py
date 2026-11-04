@@ -1,16 +1,16 @@
 """Python enums for medication schedules and adherence."""
 
-from enum import Enum
+from enum import StrEnum
 
 
-class ScheduleStatus(str, Enum):
+class ScheduleStatus(StrEnum):
     ACTIVE = "active"
     PAUSED = "paused"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
 
 
-class DoseStatus(str, Enum):
+class DoseStatus(StrEnum):
     UPCOMING = "upcoming"
     DUE = "due"
     TAKEN = "taken"
@@ -19,7 +19,6 @@ class DoseStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class DoseResponse(str, Enum):
+class DoseResponse(StrEnum):
     TAKEN = "taken"
     SKIPPED = "skipped"
-
