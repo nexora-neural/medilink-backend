@@ -90,11 +90,6 @@ class ClinicalRecordMixin:
         server_default=text("'active'"),
     )
 
-    recorded_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-    )
-
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -125,6 +120,7 @@ class ConditionsModel(ClinicalRecordMixin, Base):
     )
 
     condition_name: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     clinical_code: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
 
@@ -145,7 +141,7 @@ class DiagnosesModel(ClinicalRecordMixin, Base):
         Index(
             "ix_diagnoses_patient_date",
             "patient_user_id",
-            text("recorded_at DESC"),
+            text("diagnosed_at DESC"),
         ),
         Index(
             "ix_diagnoses_consultation",
@@ -190,6 +186,7 @@ class AllergiesModel(ClinicalRecordMixin, Base):
     )
 
     allergen: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     reaction: Mapped[str | None] = mapped_column(Text)
     severity: Mapped[str | None] = mapped_column(Text)
 
@@ -220,6 +217,7 @@ class ClinicalNotesModel(ClinicalRecordMixin, Base):
     )
 
     note_type: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     note_text: Mapped[str] = mapped_column(Text, nullable=False)
 
     supersedes_id: Mapped[UUID | None] = mapped_column(

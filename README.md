@@ -22,6 +22,8 @@ Backend runtime and development locks pin all Python packages. The frontend lock
 
 Alembic manages database schema revisions. Configure the local PostgreSQL settings in `.env`, create an empty database, and run `python -m alembic upgrade head`. At startup, the application checks database connectivity. Use Alembic migrations to create and change tables; application startup does not create schema objects.
 
+For a disposable development database, apply the organization migration with `python -m alembic upgrade head` and inspect the revision with `python -m alembic current`. To roll back that migration, run `python -m alembic downgrade c1c2a172fbc4`; this removes the organization and membership tables and their data. Review dependent revisions and preserve any needed data before rollback. Run `python -m alembic upgrade head` to apply it again.
+
 ## Project layout
 
 ```text
