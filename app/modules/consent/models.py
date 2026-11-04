@@ -16,7 +16,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base
 
-
 grant_status_enum = ENUM(
     "active",
     "expired",

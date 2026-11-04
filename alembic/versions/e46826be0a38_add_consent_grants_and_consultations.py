@@ -6,7 +6,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision = "e46826be0a38"
-down_revision = "ml22_profiles"
+down_revision = "7525292d5d7a"
 branch_labels = None
 depends_on = None
 
