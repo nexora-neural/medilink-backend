@@ -1,12 +1,15 @@
 from contextlib import asynccontextmanager
+from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
 from app.core.config import settings
 from app.database import models as _models  # noqa: F401 - register ORM metadata
 from app.database.session import check_database_connection, close_db, init_db
+from app.modules.identity.auth import AuthenticationError
 
 
 @asynccontextmanager
@@ -31,8 +34,25 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Accept", "Authorization", "Content-Type"],
+    expose_headers=["X-Request-ID"],
     max_age=600,
 )
+
+
+@app.middleware("http")
+async def assign_request_id(request: Request, call_next):
+    request.state.request_id = str(uuid4())
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request.state.request_id
+    return response
+
+
+@app.exception_handler(AuthenticationError)
+async def authentication_error_handler(request: Request, exc: AuthenticationError):
+    return JSONResponse(
+        status_code=exc.status_code, content=exc.detail, headers=exc.headers
+    )
+
 
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 
