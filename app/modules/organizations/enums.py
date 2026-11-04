@@ -22,7 +22,6 @@ class EntityStatus(str, Enum):
     INACTIVE = "inactive"
 
 
-# Store enum values ("pending"), rather than member names ("PENDING").
 organization_type_type = ENUM(
     OrganizationType,
     name="organization_type",
