@@ -2,6 +2,7 @@
 """SQLAlchemy ORM models for organizations and memberships."""
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import (
@@ -27,6 +28,8 @@ from app.modules.organizations.enums import (
     organization_type_type,
 )
 
+if TYPE_CHECKING:
+    from app.modules.identity.models import User
 
 class Organization(Base):
     """Healthcare organization ORM model."""
