@@ -1,11 +1,11 @@
-from enum import Enum
+from enum import StrEnum
 
 from sqlalchemy.dialects.postgresql import ENUM
 
 from app.database.base import Base
 
 
-class RecordSource(str, Enum):
+class RecordSource(StrEnum):
     PATIENT = "patient"
     DOCTOR = "doctor"
     PHARMACIST = "pharmacist"
@@ -14,7 +14,7 @@ class RecordSource(str, Enum):
     ADMIN = "admin"
 
 
-class DocumentStatus(str, Enum):
+class DocumentStatus(StrEnum):
     ACTIVE = "active"
     SUPERSEDED = "superseded"
     WITHDRAWN = "withdrawn"
@@ -25,9 +25,7 @@ record_source_type = ENUM(
     RecordSource,
     name="record_source",
     metadata=Base.metadata,
-    values_callable=lambda enum_class: [
-        member.value for member in enum_class
-    ],
+    values_callable=lambda enum_class: [member.value for member in enum_class],
     validate_strings=True,
 )
 
@@ -36,8 +34,6 @@ document_status_type = ENUM(
     DocumentStatus,
     name="document_status",
     metadata=Base.metadata,
-    values_callable=lambda enum_class: [
-        member.value for member in enum_class
-    ],
+    values_callable=lambda enum_class: [member.value for member in enum_class],
     validate_strings=True,
 )

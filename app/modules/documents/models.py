@@ -5,8 +5,8 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import (
-    BigInteger,
     CHAR,
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -133,27 +133,25 @@ class Document(Base):
         nullable=True,
     )
 
-
-    owner: Mapped["User"] = relationship(
+    owner: Mapped[User] = relationship(
         "User",
         foreign_keys=[owner_user_id],
         lazy="raise",
     )
 
-
-    patient: Mapped["PatientProfile | None"] = relationship(
+    patient: Mapped[PatientProfile | None] = relationship(
         "PatientProfile",
         foreign_keys=[patient_user_id],
         lazy="raise",
     )
 
-    uploader: Mapped["User | None"] = relationship(
+    uploader: Mapped[User | None] = relationship(
         "User",
         foreign_keys=[uploaded_by],
         lazy="raise",
     )
 
-    supersedes: Mapped["Document | None"] = relationship(
+    supersedes: Mapped[Document | None] = relationship(
         "Document",
         foreign_keys=[supersedes_id],
         remote_side=[id],
@@ -161,8 +159,7 @@ class Document(Base):
         lazy="raise",
     )
 
-
-    replacement_documents: Mapped[list["Document"]] = relationship(
+    replacement_documents: Mapped[list[Document]] = relationship(
         "Document",
         foreign_keys=[supersedes_id],
         back_populates="supersedes",
@@ -170,9 +167,7 @@ class Document(Base):
         lazy="raise",
     )
 
-    verification_links: Mapped[
-        list["VerificationApplicationDocument"]
-    ] = relationship(
+    verification_links: Mapped[list[VerificationApplicationDocument]] = relationship(
         "VerificationApplicationDocument",
         back_populates="document",
         passive_deletes="all",
@@ -193,8 +188,7 @@ class Document(Base):
             name=conv("ck_document_size"),
         ),
         CheckConstraint(
-            "media_type IN "
-            "('application/pdf', 'image/jpeg', 'image/png')",
+            "media_type IN ('application/pdf', 'image/jpeg', 'image/png')",
             name=conv("ck_document_media_type"),
         ),
         CheckConstraint(
