@@ -14,9 +14,15 @@ from app.modules.profiles.models import ProfessionalProfile
 from app.modules.profiles.schemas import (
     AccountUpdateRequest,
     MeResponse,
+    PatientProfileResponse,
+    PatientProfileUpdateRequest,
     ProfessionalProfileResponse,
 )
-from app.modules.profiles.service import build_me_response, update_own_account
+from app.modules.profiles.service import (
+    build_me_response,
+    update_own_account,
+    update_own_patient_profile,
+)
 
 router = APIRouter(tags=["Profiles"])
 
@@ -24,8 +30,19 @@ AccountAuditWriter = Callable[[AsyncSession, UUID, list[str]], Awaitable[None]]
 
 
 def get_account_audit_writer() -> AccountAuditWriter:
-    """Block account updates until a database audit writer is available."""
-    raise HTTPException(status_code=503, detail="Account audit service is unavailable.")
+    """Block account updates until the audit writer is available."""
+    raise HTTPException(
+        status_code=503,
+        detail="Account audit service is unavailable.",
+    )
+
+
+def get_patient_profile_audit_writer() -> AccountAuditWriter:
+    """Block patient profile updates until the audit writer is available."""
+    raise HTTPException(
+        status_code=503,
+        detail="Patient profile audit service is unavailable.",
+    )
 
 
 @router.get("/me", response_model=MeResponse)
@@ -61,6 +78,28 @@ async def patch_me(
     try:
         await update_own_account(session, user, data, write_audit=write_audit)
         response = await get_me(user=user, session=session)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+
+    return response
+
+
+@router.patch("/me/patient-profile", response_model=PatientProfileResponse)
+async def patch_patient_profile(
+    data: PatientProfileUpdateRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    write_audit: Annotated[
+        AccountAuditWriter, Depends(get_patient_profile_audit_writer)
+    ],
+) -> PatientProfileResponse:
+    """Update the authenticated patient's own profile."""
+    try:
+        response = await update_own_patient_profile(
+            session, user, data, write_audit=write_audit
+        )
         await session.commit()
     except Exception:
         await session.rollback()
