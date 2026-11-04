@@ -1,12 +1,11 @@
-
 """Enum definitions for healthcare organizations."""
 
-from enum import Enum
+from enum import StrEnum
 
 from sqlalchemy.dialects.postgresql import ENUM
 
 
-class OrganizationType(str, Enum):
+class OrganizationType(StrEnum):
     CLINIC = "clinic"
     HOSPITAL = "hospital"
     PHARMACY = "pharmacy"
@@ -14,7 +13,7 @@ class OrganizationType(str, Enum):
     OTHER = "other"
 
 
-class EntityStatus(str, Enum):
+class EntityStatus(StrEnum):
     PENDING = "pending"
     ACTIVE = "active"
     SUSPENDED = "suspended"
@@ -25,17 +24,13 @@ class EntityStatus(str, Enum):
 organization_type_type = ENUM(
     OrganizationType,
     name="organization_type",
-    values_callable=lambda enum_class: [
-        member.value for member in enum_class
-    ],
+    values_callable=lambda enum_class: [member.value for member in enum_class],
     validate_strings=True,
 )
 
 entity_status_type = ENUM(
     EntityStatus,
     name="entity_status",
-    values_callable=lambda enum_class: [
-        member.value for member in enum_class
-    ],
+    values_callable=lambda enum_class: [member.value for member in enum_class],
     validate_strings=True,
 )

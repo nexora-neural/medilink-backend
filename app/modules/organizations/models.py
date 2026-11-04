@@ -1,4 +1,3 @@
-
 """SQLAlchemy ORM models for organizations and memberships."""
 
 from datetime import datetime
@@ -30,6 +29,7 @@ from app.modules.organizations.enums import (
 
 if TYPE_CHECKING:
     from app.modules.identity.models import User
+
 
 class Organization(Base):
     """Healthcare organization ORM model."""
