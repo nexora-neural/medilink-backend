@@ -25,7 +25,6 @@ from .enum import DoseResponse, DoseStatus, ScheduleStatus
 schedule_status_enum = ENUM(
     ScheduleStatus,
     name="schedule_status",
-    schema="public",
     create_type=False,
     values_callable=lambda cls: [member.value for member in cls],
     validate_strings=True,
@@ -34,7 +33,6 @@ schedule_status_enum = ENUM(
 dose_status_enum = ENUM(
     DoseStatus,
     name="dose_status",
-    schema="public",
     create_type=False,
     values_callable=lambda cls: [member.value for member in cls],
     validate_strings=True,
@@ -43,7 +41,6 @@ dose_status_enum = ENUM(
 dose_response_enum = ENUM(
     DoseResponse,
     name="dose_response",
-    schema="public",
     create_type=False,
     values_callable=lambda cls: [member.value for member in cls],
     validate_strings=True,
