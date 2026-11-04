@@ -1,4 +1,3 @@
-
 """SQLAlchemy ORM models for clinical records."""
 
 from datetime import datetime
