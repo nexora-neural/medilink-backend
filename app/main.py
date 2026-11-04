@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from app.database import models as _models  # noqa: F401 - register ORM metadata
 from app.database.session import check_database_connection, close_db, init_db
 from app.modules.identity.auth import AuthenticationError
 
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -43,9 +45,19 @@ app.add_middleware(
 
 @app.middleware("http")
 async def assign_request_id(request: Request, call_next):
-    request.state.request_id = str(uuid4())
-    response = await call_next(request)
-    response.headers["X-Request-ID"] = request.state.request_id
+    request_id = str(uuid4())
+    request.state.request_id = request_id
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.error("Unhandled API error (request_id=%s)", request_id)
+        response = JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error"},
+        )
+
+    response.headers["X-Request-ID"] = request_id
     return response
 
 
@@ -70,16 +82,7 @@ async def validation_error_handler(
         },
     )
 
-@app.exception_handler(Exception)
-async def unexpected_error_handler(
-    request: Request, _exc: Exception
-) -> JSONResponse:
-    request_id = getattr(request.state, "request_id", None) or str(uuid4())
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error"},
-        headers={"X-Request-ID": request_id},
-    )
+
 
 
 app.include_router(api_router, prefix=settings.api_v1_prefix)

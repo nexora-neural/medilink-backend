@@ -9,7 +9,7 @@ from tests.fixtures import synthetic_database_check
 
 class HealthApiTests(IsolatedAsyncioTestCase):
     async def request(self, path: str):
-        transport = ASGITransport(app=app, raise_app_exceptions=False)
+        transport = ASGITransport(app=app, raise_app_exceptions=True)
         async with AsyncClient(transport=transport, base_url="http://testserver") as client:
             return await client.get(path)
 
@@ -33,11 +33,15 @@ class HealthApiTests(IsolatedAsyncioTestCase):
         synthetic_check = synthetic_database_check(fail=True)
         synthetic_check.side_effect = RuntimeError("synthetic-internal-error")
 
-        with patch("app.api.router.check_database_connection", synthetic_check):
-            response = await self.request("/api/v1/health/database")
+        with self.assertLogs("app.main", level="ERROR") as logs:
+            with patch("app.api.router.check_database_connection", synthetic_check):
+                response = await self.request("/api/v1/health/database")
 
         self.assertEqual(response.status_code, 500)
         self.assertNotIn("synthetic-internal-error", response.text)
         self.assertNotIn("traceback", response.text.lower())
         self.assertTrue(response.headers.get("X-Request-ID"))
         synthetic_check.assert_awaited_once_with()
+        log_output = "\n".join(logs.output)
+        self.assertIn(response.headers["X-Request-ID"], log_output)
+        self.assertNotIn("synthetic-internal-error", log_output)
