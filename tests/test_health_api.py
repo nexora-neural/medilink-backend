@@ -28,10 +28,16 @@ class HealthApiTests(IsolatedAsyncioTestCase):
         self.assertEqual(response.json(), {"database": "ok"})
         synthetic_check.assert_awaited_once_with()
 
+
     async def test_database_health_failure_returns_server_error(self):
         synthetic_check = synthetic_database_check(fail=True)
+        synthetic_check.side_effect = RuntimeError("synthetic-internal-error")
+
         with patch("app.api.router.check_database_connection", synthetic_check):
             response = await self.request("/api/v1/health/database")
 
         self.assertEqual(response.status_code, 500)
+        self.assertNotIn("synthetic-internal-error", response.text)
+        self.assertNotIn("traceback", response.text.lower())
+        self.assertTrue(response.headers.get("X-Request-ID"))
         synthetic_check.assert_awaited_once_with()
