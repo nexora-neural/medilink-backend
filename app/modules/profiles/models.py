@@ -2,6 +2,7 @@
 
 from sqlalchemy import CheckConstraint, Column, Date, DateTime, ForeignKey, Index, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.schema import conv
 
 from app.database.base import Base
 from app.modules.identity.enums import professional_role_type, verification_status_type
@@ -9,6 +10,7 @@ from app.modules.identity.enums import professional_role_type, verification_stat
 
 class PatientProfile(Base):
     __tablename__ = "patient_profiles"
+    __table_args__ = (CheckConstraint("sex IN ('female','male')", name=conv("ck_patient_sex")),)
 
     user_id = Column(
         UUID(as_uuid=True),

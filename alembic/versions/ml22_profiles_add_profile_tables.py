@@ -39,6 +39,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.PrimaryKeyConstraint("user_id"),
+        sa.CheckConstraint("sex IN ('female','male')", name=op.f("ck_patient_sex")),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="RESTRICT"),
     )
 
