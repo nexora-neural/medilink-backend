@@ -10,6 +10,7 @@ from app.modules.fhir import models as _fhir_models
 from app.modules.identity import models as _identity_models
 from app.modules.identity.models import Role, User, UserRole
 from app.modules.integrations import models as _integrations_models
+from app.modules.laboratory import models as _laboratory_models
 from app.modules.measurements import models as _measurements_models
 from app.modules.medication import models as _medication_models
 from app.modules.notifications import models as _notifications_models
