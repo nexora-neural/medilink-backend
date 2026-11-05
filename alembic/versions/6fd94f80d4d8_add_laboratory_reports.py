@@ -128,6 +128,23 @@ def upgrade() -> None:
         ["patient_user_id", sa.literal_column("created_at DESC")],
         unique=False,
     )
+    op.execute(
+        """
+        CREATE FUNCTION reject_report_identity_mutation() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+            RAISE EXCEPTION 'report_identities are immutable';
+        END;
+        $$
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER report_identities_immutable
+        BEFORE UPDATE OR DELETE ON report_identities
+        FOR EACH ROW EXECUTE FUNCTION reject_report_identity_mutation()
+        """
+    )
     op.create_table(
         "reports",
         sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
@@ -251,8 +268,10 @@ def downgrade() -> None:
         postgresql_where=sa.text("report_identity_id IS NOT NULL"),
     )
     op.drop_table("reports")
+    op.execute("DROP TRIGGER report_identities_immutable ON report_identities")
     op.drop_index("ix_report_identities_patient", table_name="report_identities")
     op.drop_table("report_identities")
+    op.execute("DROP FUNCTION reject_report_identity_mutation()")
     op.drop_index("ix_lab_requests_patient", table_name="lab_upload_requests")
     op.drop_index("ix_lab_requests_lab_status_expiry", table_name="lab_upload_requests")
     op.drop_table("lab_upload_requests")
