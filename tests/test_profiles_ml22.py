@@ -17,9 +17,21 @@ class ProfileValidationTests(TestCase):
         with self.assertRaises(ValidationError):
             OnboardRequest(display_name="Test", requested_role="patient")
         value = OnboardRequest(
-            display_name="Test", requested_role="patient", date_of_birth="2000-01-01", sex="female"
+            display_name="Test",
+            requested_role="patient",
+            date_of_birth="2000-01-01",
+            sex="female",
         )
         self.assertEqual(value.sex, "female")
+
+    def test_professional_rejects_patient_fields_even_when_null(self):
+        with self.assertRaises(ValidationError):
+            OnboardRequest(display_name="Test", requested_role="doctor", sex=None)
+
+    def test_openapi_exposes_conditional_patient_requirements(self):
+        schema = app.openapi()["components"]["schemas"]["OnboardRequest"]
+        self.assertEqual(schema["oneOf"][0]["required"], ["date_of_birth", "sex"])
+        self.assertIn("not", schema["oneOf"][1])
 
     def test_rejects_future_birth_date_and_unsupported_sex(self):
         with self.assertRaises(ValidationError):
@@ -33,13 +45,16 @@ class ProfileValidationTests(TestCase):
         with self.assertRaises(ValidationError):
             PatientProfileUpdateRequest()
         self.assertEqual(
-            AccountUpdateRequest(phone=None).model_dump(exclude_unset=True), {"phone": None}
+            AccountUpdateRequest(phone=None).model_dump(exclude_unset=True),
+            {"phone": None},
         )
 
 
 class ProfileRouteTests(IsolatedAsyncioTestCase):
     async def test_missing_auth_is_safe_and_not_cached(self):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
             response = await client.get("/api/v1/me")
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["code"], "AUTHENTICATION_REQUIRED")
