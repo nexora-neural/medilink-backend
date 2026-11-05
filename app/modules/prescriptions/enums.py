@@ -1,11 +1,11 @@
 """Prescription sharing enum values and PostgreSQL mappings."""
 
-from enum import Enum
+from enum import StrEnum
 
 from sqlalchemy.dialects.postgresql import ENUM
 
 
-class ShareStatus(str, Enum):
+class ShareStatus(StrEnum):
     CREATED = "created"
     CLAIMED = "claimed"
     CONFIRMED = "confirmed"
