@@ -141,3 +141,13 @@ The initial revision is an empty baseline because the current model modules cont
 ### PostgreSQL enum migrations
 
 Register models in `app/database/models.py` and generate revisions with `python -m alembic revision --autogenerate -m "describe change"` against an up-to-date development database. The Alembic PostgreSQL enum extension generates enum changes for new revisions; it does not repair existing revisions. For newly declared PostgreSQL enums, omit `create_type=False` in the model: the extension adds it to generated migrations. With extension version 1.11.0, explicitly setting it on the model can generate a duplicate keyword and invalid Python. Unused enum types are not automatically dropped. Review generated revisions, especially shared enums and value changes, and verify upgrade and downgrade on a disposable PostgreSQL database before merging.
+
+
+### Synthetic development roles and verification examples
+
+After applying all Alembic migrations, run `python -m app.database.seed_demo --apply`
+to add six synthetic identities and pending, approved and suspended verification examples.
+The seed is intended for local, development and test environments only. It uses synthetic
+Firebase identifiers and creates no Firebase accounts or login credentials. Existing records
+are not overwritten; rerunning the command does not duplicate the seeded identities.
+The verification tables from the verification migration must be present first.
