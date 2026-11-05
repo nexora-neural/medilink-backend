@@ -45,3 +45,8 @@ class HealthApiTests(IsolatedAsyncioTestCase):
         log_output = "\n".join(logs.output)
         self.assertIn(response.headers["X-Request-ID"], log_output)
         self.assertNotIn("synthetic-internal-error", log_output)
+        self.assertEqual(response.json()["code"], "INTERNAL_ERROR")
+        self.assertEqual(
+            response.json()["request_id"],
+            response.headers["X-Request-ID"],
+        )

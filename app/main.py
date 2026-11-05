@@ -54,7 +54,12 @@ async def assign_request_id(request: Request, call_next):
         logger.error("Unhandled API error (request_id=%s)", request_id)
         response = JSONResponse(
             status_code=500,
-            content={"detail": "Internal server error"},
+            content={
+                "code": "INTERNAL_ERROR",
+                "message": "Internal server error.",
+                "field_errors": {},
+                "request_id": request_id,
+            },
         )
 
     response.headers["X-Request-ID"] = request_id
@@ -75,7 +80,7 @@ async def validation_error_handler(
     return JSONResponse(
         status_code=422,
         content={
-            "code": "validation_error",
+            "code": "VALIDATION_ERROR",
             "message": "Invalid request input.",
             "field_errors": {},
             "request_id": request.state.request_id,

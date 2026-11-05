@@ -33,5 +33,5 @@ class ValidationErrorTests(IsolatedAsyncioTestCase):
         self.assertTrue(response.headers.get("X-Request-ID"))
         self.assertNotIn(submitted_value, response.text)
 
-        self.assertEqual(response.json()["code"], "validation_error")
+        self.assertEqual(response.json()["code"], "VALIDATION_ERROR")
         self.assertEqual(response.json()["request_id"], response.headers["X-Request-ID"])
