@@ -1,7 +1,7 @@
 """Add notification persistence.
 
 Revision ID: notifications_orm
-Revises: c2b1011a8d51
+Revises: rx_review_evidence
 """
 
 import sqlalchemy as sa
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "notifications_orm"
-down_revision = "c2b1011a8d51"
+down_revision = "rx_review_evidence"
 branch_labels = None
 depends_on = None
 
