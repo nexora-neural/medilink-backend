@@ -151,3 +151,13 @@ The seed is intended for local, development and test environments only. It uses 
 Firebase identifiers and creates no Firebase accounts or login credentials. Existing records
 are not overwritten; rerunning the command does not duplicate the seeded identities.
 The verification tables from the verification migration must be present first.
+
+### Patient onboarding
+
+`POST /api/v1/me/onboard` requires a verified Firebase bearer token, `display_name`,
+and `requested_role`. Patient requests also require `date_of_birth` (ISO date, not
+in the future) and `sex` (`female` or `male`). This extends the original onboarding
+contract to supply the fields required by the patient profile schema. Professional
+requests must not include these patient fields. Repeated requests reconcile using
+the verified Firebase UID; matching email addresses do not merge accounts. Role
+seed data must be present. Account and profile changes are recorded in audit events.
