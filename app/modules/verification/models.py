@@ -15,13 +15,14 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.schema import conv
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.schema import conv
 
 from app.database.base import Base
 from app.modules.identity.enums import professional_role_type, verification_status_type
 
 if TYPE_CHECKING:
+    from app.modules.documents.models import Document
     from app.modules.identity.models import User
     from app.modules.organizations.models import Organization
 
@@ -134,3 +135,57 @@ class VerificationDecision(Base):
 
     application: Mapped["VerificationApplication"] = relationship(back_populates="decisions")
     reviewer: Mapped["User"] = relationship(foreign_keys=[reviewer_user_id])
+
+
+class VerificationApplicationDocument(Base):
+    __tablename__ = "verification_application_documents"
+
+    application_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey(
+            "verification_applications.id",
+            name=("verification_application_documents_application_id_fkey"),
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+
+    document_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey(
+            "documents.id",
+            name=("verification_application_documents_document_id_fkey"),
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+
+    attached_by: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            name=("verification_application_documents_attached_by_fkey"),
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+
+    attached_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "application_id",
+            "document_id",
+            name="verification_application_documents_pkey",
+        ),
+        Index(
+            "ix_verification_application_documents_document",
+            "document_id",
+        ),
+    )
+
+    document: Mapped["Document"] = relationship("Document", back_populates="verification_links")
