@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from app.api.router import api_router
 from app.core.config import settings
+from app.core.rate_limits import RateLimitExceeded, rate_limit_exceeded_handler
 from app.database import models as _models  # noqa: F401 - register ORM metadata
 from app.database.session import check_database_connection, close_db, init_db
 from app.modules.identity.auth import AuthenticationError
@@ -123,6 +124,7 @@ async def validation_error_handler(
     )
 
 
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 
 
