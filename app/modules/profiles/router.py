@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.session import get_session
 from app.modules.audit.models import AuditEvent
 from app.modules.identity.auth import get_current_user, get_verified_identity
+from app.modules.identity.authorization import require_role
 from app.modules.identity.models import User
 from app.modules.profiles.models import ProfessionalProfile
 from app.modules.profiles.route import ProfileRoute
@@ -155,6 +156,7 @@ async def patch_patient_profile(
     write_audit: Annotated[AccountAuditWriter, Depends(get_patient_profile_audit_writer)],
 ) -> PatientProfileResponse:
     """Update the authenticated patient's own profile."""
+    await require_role(session, user, "patient")
     try:
         response = await update_own_patient_profile(session, user, data, write_audit=write_audit)
         await session.commit()
