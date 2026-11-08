@@ -15,20 +15,20 @@ from app.modules.organizations.models import (
     Organization,
     OrganizationMembership,
 )
-from app.modules.profiles.models import ProfessionalProfile
 from app.modules.prescriptions import repository
 from app.modules.prescriptions.schemas import (
     MedicineInput,
     MedicinesRead,
     MedicinesReadPage,
 )
+from app.modules.profiles.models import ProfessionalProfile
 
 
 def forbidden(request: Request) -> AuthenticationError:
     return AuthenticationError(
         status_code=403,
         detail={
-            "code": "PERMISSION_DENIED",
+            "code": "ACCESS_DENIED",
             "message": "Permission denied.",
             "field_errors": {},
             "request_id": request.state.request_id,

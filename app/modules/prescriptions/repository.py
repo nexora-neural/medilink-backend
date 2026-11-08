@@ -57,8 +57,8 @@ async def get_medicines(
     statement = (
         statement
         .order_by(
-            Medicine.generic_name.asc(),
-            Medicine.id.asc(),
+            Medicine.created_at.desc(),
+            Medicine.id.desc(),
         )
         .offset((page - 1) * page_size)
         .limit(page_size)

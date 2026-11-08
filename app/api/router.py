@@ -15,8 +15,8 @@ from app.modules.measurements.router import router as measurements_router
 from app.modules.medication.router import router as medication_router
 from app.modules.notifications.router import router as notifications_router
 from app.modules.organizations.router import router as organizations_router
-from app.modules.prescriptions.router import router as prescriptions_router
 from app.modules.prescriptions.router import medicine_router
+from app.modules.prescriptions.router import router as prescriptions_router
 from app.modules.profiles.router import router as profiles_router
 from app.modules.vaccinations.router import router as vaccinations_router
 from app.modules.verification.router import router as verification_router

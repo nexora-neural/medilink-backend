@@ -95,7 +95,19 @@ async def get_medicines(
         int, Query(ge=1, le=100)
     ] = 20,
 ) -> MedicinesReadPage:
-
+    unknown = set(request.query_params) - {"q", "page", "page_size"}
+    if unknown:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "code": "VALIDATION_ERROR",
+                "message": "Please check the highlighted fields.",
+                "field_errors": {
+                    f"query.{key}": ["Unknown query parameter."] for key in sorted(unknown)
+                },
+                "request_id": getattr(request.state, "request_id", ""),
+            },
+        )
     return await service.list_medicines(
         session=session,
         user=current_user,
