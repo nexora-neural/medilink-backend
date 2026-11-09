@@ -1,5 +1,6 @@
 # ruff: noqa: F401
 
+from app.core.rate_limits import request_rate_limits as _request_rate_limits
 from app.modules.audit import models as _audit_models
 from app.modules.clinical_records import models as _clinical_records_models
 from app.modules.consent import models as _consent_models

@@ -1,1 +1,1 @@
-"""Celery task modules will be added during implementation."""
+"""Background task implementations belong in this package."""

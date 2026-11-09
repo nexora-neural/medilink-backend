@@ -1,6 +1,6 @@
 from urllib.parse import urlsplit
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     firebase_project_id: str | None = None
     private_upload_dir: str = "./data/private_uploads"
     cors_origins: list[str] = ["http://localhost:4200"]
+
+    rate_limit_authenticated_per_minute: int = Field(default=120, gt=0)
+    rate_limit_resolution_per_account_per_minute: int = Field(default=10, gt=0)
+    rate_limit_resolution_per_ip_per_minute: int = Field(default=30, gt=0)
+    rate_limit_uploads_per_account_per_hour: int = Field(default=20, gt=0)
+    rate_limit_integration_per_client_per_minute: int = Field(default=60, gt=0)
 
     @field_validator("cors_origins")
     @classmethod

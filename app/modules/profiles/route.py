@@ -15,19 +15,10 @@ class ProfileRoute(APIRoute):
             try:
                 response = await handler(request)
             except RequestValidationError as exc:
-                fields = {}
-                for error in exc.errors():
-                    path = ".".join(str(x) for x in error["loc"] if x not in ("body", "query"))
-                    fields.setdefault(path or "request", []).append("Invalid value.")
-                response = JSONResponse(
-                    status_code=422,
-                    content={
-                        "code": "VALIDATION_ERROR",
-                        "message": "The request is invalid.",
-                        "field_errors": fields,
-                        "request_id": request_id,
-                    },
-                )
+                validation_handler = request.app.exception_handlers[
+                    RequestValidationError
+                ]
+                response = await validation_handler(request, exc)
             except HTTPException as exc:
                 if isinstance(exc.detail, dict):
                     content = exc.detail
@@ -47,18 +38,11 @@ class ProfileRoute(APIRoute):
                         "request_id": request_id,
                     }
                 response = JSONResponse(
-                    status_code=exc.status_code, content=content, headers=exc.headers
+                    status_code=exc.status_code,
+                    content=content,
+                    headers=exc.headers,
                 )
-            except Exception:
-                response = JSONResponse(
-                    status_code=500,
-                    content={
-                        "code": "INTERNAL_ERROR",
-                        "message": "An internal error occurred.",
-                        "field_errors": {},
-                        "request_id": request_id,
-                    },
-                )
+
             response.headers["Cache-Control"] = "no-store"
             return response
 

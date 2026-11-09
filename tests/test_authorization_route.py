@@ -8,9 +8,13 @@ from httpx import ASGITransport, AsyncClient
 from app.database.session import get_session
 from app.main import app
 from app.modules.identity.auth import get_current_user
+from app.modules.identity.request_limits import require_authenticated_rate_limit
 
 
 class PatientProfileAuthorizationTests(IsolatedAsyncioTestCase):
+    def setUp(self):
+        app.dependency_overrides[require_authenticated_rate_limit] = lambda: None
+
     async def asyncTearDown(self):
         app.dependency_overrides.clear()
 
