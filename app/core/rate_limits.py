@@ -1,57 +1,39 @@
-"""Atomic Redis counters for backend request limits."""
+"""Shared fixed-window counters for backend request limits."""
+
+import logging
+from asyncio import timeout
+from dataclasses import dataclass
+from datetime import datetime
+from hashlib import sha256
+from math import ceil
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from redis.asyncio import Redis
+from sqlalchemy import CheckConstraint, Column, DateTime, Integer, String, Table, case, func, select
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError
 
-_RATE_LIMIT_SCRIPT = """
-local key = KEYS[1]
-local limit = tonumber(ARGV[1])
-local window_ms = tonumber(ARGV[2])
+from app.core.config import settings
+from app.database.base import Base
+from app.database.session import engine
 
-local count = tonumber(redis.call("GET", key) or "0")
-local remaining_ms = redis.call("PTTL", key)
+logger = logging.getLogger(__name__)
 
-if remaining_ms <= 0 then
-    redis.call("SET", key, 1, "PX", window_ms)
-    return 0
-end
-
-if count >= limit then
-    return remaining_ms
-end
-
-redis.call("INCR", key)
-return 0
-"""
+request_rate_limits = Table(
+    "request_rate_limits",
+    Base.metadata,
+    Column("bucket_key", String(64), primary_key=True),
+    Column("window_end", DateTime(timezone=True), nullable=False, index=True),
+    Column("request_count", Integer, nullable=False),
+    CheckConstraint("request_count > 0", name="positive_count"),
+)
 
 
-async def consume_rate_limit(
-    client: Redis,
-    *,
-    key: str,
-    limit: int,
-    window_seconds: int,
-) -> int:
-    """Return zero when allowed, otherwise the retry delay in seconds.
-
-    A fixed window begins with the first accepted request.
-    Rejected requests do not extend the window.
-    Redis failures propagate so the caller can return a safe service error.
-    """
-    if limit <= 0 or window_seconds <= 0:
-        raise ValueError("Rate limit and window must be positive.")
-
-    remaining_ms = int(
-        await client.eval(
-            _RATE_LIMIT_SCRIPT,
-            1,
-            key,
-            limit,
-            window_seconds * 1000,
-        )
-    )
-    return (remaining_ms + 999) // 1000
+@dataclass(frozen=True)
+class Quota:
+    scope: str
+    actor: str
+    limit: int
 
 
 class RateLimitExceeded(Exception):
@@ -62,28 +44,55 @@ class RateLimitExceeded(Exception):
         self.retry_after = retry_after
 
 
-async def enforce_rate_limit(
-    client: Redis,
-    *,
-    key: str,
-    limit: int,
-    window_seconds: int,
-) -> None:
-    """Stop the request when its counter reaches the limit."""
-    retry_after = await consume_rate_limit(
-        client,
-        key=key,
-        limit=limit,
-        window_seconds=window_seconds,
-    )
-    if retry_after > 0:
-        raise RateLimitExceeded(retry_after)
+class RateLimitUnavailable(Exception):
+    """The shared counter store is temporarily unavailable."""
+
+
+async def enforce_rate_limit(request: Request, *quotas: Quota, window_seconds: int) -> None:
+    """Charge all quotas atomically before running the operation."""
+    try:
+        async with timeout(3), engine.begin() as connection:
+            now = await connection.scalar(select(func.clock_timestamp()))
+            end_timestamp = (int(now.timestamp()) // window_seconds + 1) * window_seconds
+            window_end = datetime.fromtimestamp(end_timestamp, tz=now.tzinfo)
+            counters = request_rate_limits.c
+            for quota in quotas:
+                key = sha256(
+                    f"{settings.app_env}:{quota.scope}:{quota.actor}".encode()
+                ).hexdigest()
+                new = insert(request_rate_limits).values(
+                    bucket_key=key, window_end=window_end, request_count=1
+                )
+                updated = new.on_conflict_do_update(
+                    index_elements=[counters.bucket_key],
+                    set_={
+                        "window_end": window_end,
+                        "request_count": case(
+                            (counters.window_end < window_end, 1),
+                            else_=counters.request_count + 1,
+                        ),
+                    },
+                    where=(counters.window_end < window_end)
+                    | (
+                        (counters.window_end == window_end)
+                        & (counters.request_count < quota.limit)
+                    ),
+                ).returning(counters.request_count)
+                if await connection.scalar(updated) is None:
+                    rejected_at = await connection.scalar(select(func.clock_timestamp()))
+                    retry_after = max(1, ceil((window_end - rejected_at).total_seconds()))
+                    raise RateLimitExceeded(retry_after)
+    except (SQLAlchemyError, OSError, TimeoutError):
+        logger.warning(
+            "Rate-limit store unavailable (request_id=%s)",
+            getattr(request.state, "request_id", ""),
+        )
+        raise RateLimitUnavailable from None
 
 
 async def rate_limit_exceeded_handler(
     request: Request, exc: RateLimitExceeded
 ) -> JSONResponse:
-    """Return the API's rate-limit error response."""
     return JSONResponse(
         status_code=429,
         content={
@@ -92,5 +101,20 @@ async def rate_limit_exceeded_handler(
             "field_errors": {},
             "request_id": request.state.request_id,
         },
-        headers={"Retry-After": str(exc.retry_after)},
+        headers={"Retry-After": str(exc.retry_after), "Cache-Control": "no-store"},
+    )
+
+
+async def rate_limit_unavailable_handler(
+    request: Request, exc: RateLimitUnavailable
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={
+            "code": "SERVICE_UNAVAILABLE",
+            "message": "Request rate limiting is temporarily unavailable.",
+            "field_errors": {},
+            "request_id": request.state.request_id,
+        },
+        headers={"Cache-Control": "no-store"},
     )

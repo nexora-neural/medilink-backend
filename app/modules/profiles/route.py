@@ -5,8 +5,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
-from app.core.rate_limits import RateLimitExceeded, rate_limit_exceeded_handler
-
 
 class ProfileRoute(APIRoute):
     def get_route_handler(self):
@@ -21,8 +19,6 @@ class ProfileRoute(APIRoute):
                     RequestValidationError
                 ]
                 response = await validation_handler(request, exc)
-            except RateLimitExceeded as exc:
-                response = await rate_limit_exceeded_handler(request, exc)
             except HTTPException as exc:
                 if isinstance(exc.detail, dict):
                     content = exc.detail
@@ -45,16 +41,6 @@ class ProfileRoute(APIRoute):
                     status_code=exc.status_code,
                     content=content,
                     headers=exc.headers,
-                )
-            except Exception:
-                response = JSONResponse(
-                    status_code=500,
-                    content={
-                        "code": "INTERNAL_ERROR",
-                        "message": "An internal error occurred.",
-                        "field_errors": {},
-                        "request_id": request_id,
-                    },
                 )
 
             response.headers["Cache-Control"] = "no-store"

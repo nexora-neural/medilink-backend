@@ -1,50 +1,69 @@
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
-from httpx import ASGITransport, AsyncClient
-from redis.asyncio import Redis
+from starlette.requests import Request
 
-from app.core.rate_limits import enforce_rate_limit
-from app.main import app
+from app.core.config import settings
+from app.core.rate_limits import Quota, RateLimitUnavailable
+from app.modules.identity.request_limits import (
+    require_resolution_rate_limit,
+    require_upload_rate_limit,
+)
+from app.modules.integrations.request_limits import require_integration_rate_limit
 
 
-class RateLimitResponseTests(IsolatedAsyncioTestCase):
-    async def test_exceeded_limit_returns_429_with_retry_after(self):
-        redis_client = Mock(spec=Redis)
-        redis_client.eval = AsyncMock(side_effect=[0, 1001])
-        endpoint_calls = []
+class SpecializedRateLimitTests(IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.request = Request({
+            "type": "http",
+            "client": ("::ffff:192.0.2.1", 1024),
+            "headers": [(b"x-forwarded-for", b"198.51.100.1")],
+        })
+        self.identity = {"uid": "synthetic-account"}
 
-        with patch.object(app.router, "routes", app.router.routes.copy()):
+    async def test_resolution_uses_verified_account_and_asgi_peer_ip(self):
+        limiter = AsyncMock()
+        with patch("app.modules.identity.request_limits.enforce_rate_limit", limiter):
+            await require_resolution_rate_limit(self.request, self.identity)
 
-            @app.get("/_test/rate-limit")
-            async def limited_endpoint():
-                await enforce_rate_limit(
-                    redis_client,
-                    key="medilink:test:authenticated:account-1",
-                    limit=120,
-                    window_seconds=60,
-                )
-                endpoint_calls.append("allowed")
-                return {"status": "ok"}
+        limiter.assert_awaited_once_with(
+            self.request,
+            Quota(
+                "resolution-account",
+                "synthetic-account",
+                settings.rate_limit_resolution_per_account_per_minute,
+            ),
+            Quota("resolution-ip", "192.0.2.1", settings.rate_limit_resolution_per_ip_per_minute),
+            window_seconds=60,
+        )
 
-            transport = ASGITransport(app=app, raise_app_exceptions=True)
-            async with AsyncClient(
-                transport=transport,
-                base_url="http://testserver",
-            ) as client:
-                allowed = await client.get("/_test/rate-limit")
-                blocked = await client.get("/_test/rate-limit")
+    async def test_resolution_fails_closed_without_a_peer_ip(self):
+        request = Request({"type": "http"})
+        with self.assertRaises(RateLimitUnavailable):
+            await require_resolution_rate_limit(request, self.identity)
 
-        self.assertEqual(allowed.status_code, 200)
-        self.assertEqual(blocked.status_code, 429)
-        self.assertEqual(blocked.headers["Retry-After"], "2")
-        self.assertEqual(endpoint_calls, ["allowed"])
-        self.assertEqual(
-            blocked.json(),
-            {
-                "code": "RATE_LIMITED",
-                "message": "Too many requests. Please try again later.",
-                "field_errors": {},
-                "request_id": blocked.headers["X-Request-ID"],
-            },
+    async def test_upload_uses_the_hourly_account_quota(self):
+        limiter = AsyncMock()
+        with patch("app.modules.identity.request_limits.enforce_rate_limit", limiter):
+            await require_upload_rate_limit(self.request, self.identity)
+
+        limiter.assert_awaited_once_with(
+            self.request,
+            Quota("upload", "synthetic-account", settings.rate_limit_uploads_per_account_per_hour),
+            window_seconds=3600,
+        )
+
+    async def test_integration_uses_authenticated_client_id(self):
+        client_id = uuid4()
+        limiter = AsyncMock()
+        with patch("app.modules.integrations.request_limits.enforce_rate_limit", limiter):
+            await require_integration_rate_limit(self.request, client_id)
+
+        limiter.assert_awaited_once_with(
+            self.request,
+            Quota(
+                "integration", str(client_id), settings.rate_limit_integration_per_client_per_minute
+            ),
+            window_seconds=60,
         )

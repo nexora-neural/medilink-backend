@@ -13,11 +13,8 @@ from app.modules.audit.models import AuditEvent
 from app.modules.identity.auth import get_current_user, get_verified_identity
 from app.modules.identity.authorization import require_role
 from app.modules.identity.models import User
+from app.modules.identity.request_limits import require_authenticated_rate_limit
 from app.modules.profiles.models import ProfessionalProfile
-from app.modules.profiles.rate_limit import (
-    profile_rate_limit_lifespan,
-    require_profile_rate_limit,
-)
 from app.modules.profiles.route import ProfileRoute
 from app.modules.profiles.schemas import (
     AccountUpdateRequest,
@@ -37,8 +34,7 @@ from app.modules.profiles.service import (
 router = APIRouter(
     tags=["Profiles"],
     route_class=ProfileRoute,
-    dependencies=[Depends(require_profile_rate_limit)],
-    lifespan=profile_rate_limit_lifespan,
+    dependencies=[Depends(require_authenticated_rate_limit)],
 )
 
 AccountAuditWriter = Callable[[AsyncSession, UUID, list[str]], Awaitable[None]]

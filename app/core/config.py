@@ -13,10 +13,6 @@ class Settings(BaseSettings):
     private_upload_dir: str = "./data/private_uploads"
     cors_origins: list[str] = ["http://localhost:4200"]
 
-    redis_url: str = Field(
-        default="redis://localhost:6379/0",
-        repr=False,
-    )
     rate_limit_authenticated_per_minute: int = Field(default=120, gt=0)
     rate_limit_resolution_per_account_per_minute: int = Field(default=10, gt=0)
     rate_limit_resolution_per_ip_per_minute: int = Field(default=30, gt=0)

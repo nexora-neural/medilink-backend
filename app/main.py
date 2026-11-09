@@ -10,7 +10,12 @@ from pydantic import BaseModel
 
 from app.api.router import api_router
 from app.core.config import settings
-from app.core.rate_limits import RateLimitExceeded, rate_limit_exceeded_handler
+from app.core.rate_limits import (
+    RateLimitExceeded,
+    RateLimitUnavailable,
+    rate_limit_exceeded_handler,
+    rate_limit_unavailable_handler,
+)
 from app.database import models as _models  # noqa: F401 - register ORM metadata
 from app.database.session import check_database_connection, close_db, init_db
 from app.modules.identity.auth import AuthenticationError
@@ -41,7 +46,7 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Accept", "Authorization", "Content-Type"],
-    expose_headers=["X-Request-ID"],
+    expose_headers=["X-Request-ID", "Retry-After"],
     max_age=600,
 )
 
@@ -66,6 +71,8 @@ async def assign_request_id(request: Request, call_next):
         )
 
     response.headers["X-Request-ID"] = request_id
+    if response.status_code >= 400:
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 
@@ -84,7 +91,7 @@ async def authentication_error_handler(
 async def validation_error_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
-    """Return fixed messages using known top-level body field names."""
+    """Return fixed messages using declared body, query and path field names."""
     route = request.scope.get("route")
     body_field = getattr(route, "body_field", None)
     field_info = getattr(body_field, "field_info", None)
@@ -99,6 +106,11 @@ async def validation_error_handler(
             if isinstance(field.validation_alias, str):
                 known_fields.add(field.validation_alias)
 
+    dependant = getattr(route, "dependant", None)
+    parameters = {
+        source: {field.alias for field in getattr(dependant, f"{source}_params", ())}
+        for source in ("query", "path")
+    }
     field_errors: dict[str, list[str]] = {}
     for error in exc.errors():
         location = error.get("loc", ())
@@ -110,6 +122,8 @@ async def validation_error_handler(
             and location[1] in known_fields
         ):
             field_name = location[1]
+        elif len(location) == 2 and location[1] in parameters.get(location[0], ()):
+            field_name = f"{location[0]}.{location[1]}"
 
         field_errors[field_name] = ["Invalid value."]
 
@@ -125,6 +139,7 @@ async def validation_error_handler(
 
 
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitUnavailable, rate_limit_unavailable_handler)
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 
 

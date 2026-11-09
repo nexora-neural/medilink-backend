@@ -3,6 +3,7 @@
 import os
 from datetime import UTC, datetime, timedelta
 from unittest import IsolatedAsyncioTestCase, skipUnless
+from unittest.mock import patch
 from uuid import uuid4
 
 from httpx import ASGITransport, AsyncClient
@@ -12,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from app.database.session import get_session
 from app.main import app
 from app.modules.audit.models import AuditEvent
-from app.modules.identity.auth import get_current_user
+from app.modules.identity.auth import get_current_user, get_verified_identity
 from app.modules.identity.models import Role, User, UserRole
 from app.modules.prescriptions.core_models import Medicine
 
@@ -49,6 +50,13 @@ class MedicineCatalogueTests(IsolatedAsyncioTestCase):
         async def user_override():
             return self.actor
 
+        async def verified_identity_override():
+            return {"uid": self.actor.firebase_uid}
+
+        counter_engine = patch("app.core.rate_limits.engine", self.engine)
+        counter_engine.start()
+        self.addCleanup(counter_engine.stop)
+        app.dependency_overrides[get_verified_identity] = verified_identity_override
         app.dependency_overrides[get_session] = session_override
         app.dependency_overrides[get_current_user] = user_override
         self.client = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
@@ -77,10 +85,13 @@ class MedicineCatalogueTests(IsolatedAsyncioTestCase):
         self.assertEqual(response.json()["items"][0]["generic_name"], "Older")
         response = await self.client.get("/api/v1/medicines", params={"q": "old"})
         self.assertEqual(response.json()["total"], 1)
-        response = await self.client.get("/api/v1/medicines", params={"unknown": "x"})
+        response = await self.client.get(
+            "/api/v1/medicines", params={"synthetic-query-secret": "x"}
+        )
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.json()["code"], "VALIDATION_ERROR")
-        self.assertIn("query.unknown", response.json()["field_errors"])
+        self.assertIn("query", response.json()["field_errors"])
+        self.assertNotIn("synthetic-query-secret", response.text)
 
     async def test_write_permission_and_atomic_audit(self):
         payload = {"generic_name": "Test medicine"}

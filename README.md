@@ -14,8 +14,6 @@ FastAPI backend starter for the MediLink academic project. The starter follows t
 | API and validation | FastAPI 0.162.0, Pydantic 2.14.1 | `requirements.lock` |
 | ORM and PostgreSQL driver | SQLAlchemy 2.1.6, asyncpg 0.32.0 | `requirements.lock` |
 | Database server | PostgreSQL 18 | Team baseline; server installation is separate from Python dependencies |
-| Background jobs | Celery 5.6.3 | `requirements.lock` |
-| Redis client and broker | redis-py 6.4.0; Redis OSS 7.4 (extended release baseline) | `requirements.lock`; server installation is separate |
 | Firebase Admin SDK | 7.7.0 | `requirements.lock` |
 
 Backend runtime and development locks pin all Python packages. The frontend lock file pins its complete npm dependency tree. Install from these lock files for reproducible setup; the unpinned requirement files are dependency inputs, not the installation source.
@@ -51,7 +49,7 @@ app/
 │   ├── integrations/
 │   └── fhir/
 ├── services/                  # Shared services such as private file storage
-└── workers/                   # Celery app and background task modules
+└── workers/                   # Background task placeholders
 ```
 
 Each feature should contain only the layers it needs. A typical feature can use:
@@ -76,11 +74,11 @@ Then run lint and API checks:
     ruff check .
     python -m unittest discover -s tests -v
 
-The API tests use synthetic async database-check fixtures. They do not start the application lifespan, connect to PostgreSQL, or use real health data. A failing synthetic database check is expected to produce HTTP 500, and the test runner exits non-zero if an assertion fails.
+By default the API tests use synthetic fixtures without connecting to PostgreSQL. Set `ML30_TEST_DATABASE_URL` and `ML90_TEST_DATABASE_URL` to a dedicated, migrated PostgreSQL test database to run the optional integration tests.
 
 ## Local setup
 
-Prerequisites: Python 3.13.13, PostgreSQL 18, Redis OSS 7.4, and Git. Install and run PostgreSQL and Redis using the method already used by your team.
+Prerequisites: Python 3.13.13, PostgreSQL 18, and Git.
 
 1. Create a virtual environment and install the pinned development dependencies:
 
@@ -93,16 +91,17 @@ Prerequisites: Python 3.13.13, PostgreSQL 18, Redis OSS 7.4, and Git. Install an
 
    For runtime-only installation, use `python -m pip install -r requirements.lock`.
 
-2. Create local configuration after PostgreSQL and Redis are running:
+2. Create local configuration after PostgreSQL is running:
 
    ```bash
    cp .env.example .env
    ```
 
-3. Start the API:
+3. Apply migrations and start the API:
 
    ```bash
-   uvicorn app.main:app --reload
+   python -m alembic upgrade head
+   uvicorn app.main:app --reload --no-access-log --no-proxy-headers
    ```
 
 4. Open the local API documentation at `http://127.0.0.1:8000/docs`. The `/health` route checks the API process; `/health/database` checks the database. The database check is also available under `/api/v1/health/database` because the API router is versioned.
@@ -120,6 +119,23 @@ python -m alembic heads
 ```
 
 The initial revision is an empty baseline because the current model modules contain no mapped domain tables. Future model changes require reviewed migration revisions. For a database previously populated by `create_all()`, compare its schema and decide on a migration strategy before applying or stamping revisions; do not assume it matches. Do not use real patient data in local development or demos.
+
+## Backend request limits
+
+All API workers use the same PostgreSQL counters. Fixed windows reset at the next UTC minute or hour boundary using database time. Each successful quota check is committed before business processing. A request rejected by either resolution quota spends neither quota. Limit responses return `429 RATE_LIMITED` with `Retry-After` in seconds. If the shared counter is unavailable, protected requests receive `503 SERVICE_UNAVAILABLE`.
+
+| Operation | Demo limit | Wiring |
+|---|---|---|
+| Authenticated profiles and medicine catalogue | 120/minute per verified account | `require_authenticated_rate_limit` on existing routers |
+| QR, claim and request-token resolution | 10/minute per account and 30/minute per IP | Use `require_resolution_rate_limit` on the feature routes |
+| Uploads and OCR starts | 20/hour per account | Use `require_upload_rate_limit` and call `validate_document_upload` before processing a file |
+| Mock lab integration | 60/minute per client | Call `require_integration_rate_limit` with the client ID resolved by API-key authentication |
+
+Use one operation class per endpoint. The last three classes are ready for the feature routers as their handlers are implemented. Upload validation accepts detected PDF, JPEG or PNG files up to 10 MiB and returns safe 413 or 415 responses. Firebase-hosted sign-in quotas are configured in Firebase. The backend limits above use verified identities. An unauthenticated-attempt quota and a total request-body cap are separate decisions.
+
+Use the ASGI peer address for the IP quota. Behind a reverse proxy, configure Uvicorn to trust only explicitly listed proxies that set the forwarded address. Disable raw access logs where URLs can include private identifiers. Application error logs use request IDs and omit request inputs and exception details.
+
+The store keeps one row per hashed quota key and resets it on use. If operating a long-lived environment, periodically remove inactive counters with `DELETE FROM request_rate_limits WHERE window_end < now() - INTERVAL '1 day'`.
 
 ## Configuration and credentials
 
