@@ -2,15 +2,14 @@
 
 
 
-from uuid import UUID
-
 from fastapi import Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.audit.models import AuditEvent
 from app.modules.identity.auth import AuthenticationError
-from app.modules.identity.models import Role, User, UserRole
+from app.modules.identity.models import User
+from app.modules.identity.repository import get_roles
 from app.modules.organizations.models import (
     Organization,
     OrganizationMembership,
@@ -34,22 +33,6 @@ def forbidden(request: Request) -> AuthenticationError:
             "request_id": request.state.request_id,
         },
     )
-
-
-async def get_roles(
-    session: AsyncSession,
-    user_id: UUID,
-) -> set[str]:
-    """Retrieve roles from local database assignments."""
-
-    statement = (
-        select(Role.code)
-        .join(UserRole, UserRole.role_id == Role.id)
-        .where(UserRole.user_id == user_id)
-    )
-
-    result = await session.scalars(statement)
-    return set(result.all())
 
 
 async def require_medicine_reader(

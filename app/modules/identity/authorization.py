@@ -24,7 +24,7 @@ async def require_role(session: AsyncSession, user: User, role: str) -> None:
         deny()
     result = await session.scalar(
         select(Role.id).join(UserRole, UserRole.role_id == Role.id).where(
-            UserRole.user_id == user.id, Role.code == role
+            UserRole.user_id == user.id, UserRole.revoked_at.is_(None), Role.code == role
         )
     )
     if result is None:
