@@ -19,6 +19,10 @@ from app.core.rate_limits import (
 from app.database import models as _models  # noqa: F401 - register ORM metadata
 from app.database.session import check_database_connection, close_db, init_db
 from app.modules.identity.auth import AuthenticationError
+from app.modules.documents.errors import (
+    DocumentError,
+    document_error_handler,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +146,14 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 app.add_exception_handler(RateLimitUnavailable, rate_limit_unavailable_handler)
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 
+# Private document error handling
+
+app.add_exception_handler(
+    DocumentError,
+    document_error_handler,
+)
+
+app.include_router(api_router, prefix=settings.api_v1_prefix)
 
 @app.get("/health", tags=["health"])
 async def health_check() -> dict[str, str]:
