@@ -21,7 +21,8 @@ DB = Annotated[AsyncSession, Depends(get_session)]
 Actor = Annotated[User, Depends(get_current_user)]
 
 
-async def _validate(request: Request, file: UploadFile) -> str | JSONResponse:
+async def _validate(request: Request,
+                    file: UploadFile) -> str | JSONResponse:
     return await validate_document_upload(request, file)
 
 
@@ -68,17 +69,35 @@ async def upload_verification_document(
 
 
 @router.get("/documents/{document_id}", response_model=DocumentRead)
-async def get_document(document_id: UUID, request: Request, db: DB, actor: Actor):
-    return await service.permitted_document(db, actor, document_id, request.state.request_id)
+async def get_document(document_id: UUID,
+                       request: Request,
+                       db: DB,
+                       actor: Actor):
+    return await service.permitted_document(db,
+                                            actor,
+                                            document_id,
+                                            request.state.request_id)
 
 
 @router.get("/documents/{document_id}/content")
-async def download_document(document_id: UUID, request: Request, db: DB, actor: Actor):
-    doc = await service.permitted_document(db, actor, document_id, request.state.request_id, content=True)
+async def download_document(document_id: UUID,
+                            request: Request,
+                            db: DB,
+                            actor: Actor):
+    doc = await service.permitted_document(db, actor,
+                                           document_id,
+                                           request.state.request_id,
+                                           content=True)
     try:
         path = await run_in_threadpool(storage.get_download_path, doc.storage_key)
+
     except (OSError, ValueError):
-        raise DocumentError(404, "NOT_FOUND", "Document content is unavailable.") from None
+        raise DocumentError(
+            404,
+            "RESOURCE_NOT_FOUND",
+            "Document content is unavailable.",
+        ) from None
+
     filename = doc.original_filename.replace('"', "").replace("\r", "").replace("\n", "")
     return FileResponse(path, media_type=doc.media_type, filename=filename,
                         content_disposition_type="attachment",

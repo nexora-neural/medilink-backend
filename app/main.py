@@ -142,10 +142,6 @@ async def validation_error_handler(
     )
 
 
-app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
-app.add_exception_handler(RateLimitUnavailable, rate_limit_unavailable_handler)
-app.include_router(api_router, prefix=settings.api_v1_prefix)
-
 app.add_exception_handler(
     RateLimitExceeded,
     rate_limit_exceeded_handler,
@@ -167,6 +163,7 @@ app.include_router(
     api_router,
     prefix=settings.api_v1_prefix,
 )
+
 
 @app.get("/health", tags=["health"])
 async def health_check() -> dict[str, str]:
