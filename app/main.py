@@ -146,14 +146,27 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 app.add_exception_handler(RateLimitUnavailable, rate_limit_unavailable_handler)
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 
-# Private document error handling
+app.add_exception_handler(
+    RateLimitExceeded,
+    rate_limit_exceeded_handler,
+)
 
+app.add_exception_handler(
+    RateLimitUnavailable,
+    rate_limit_unavailable_handler,
+)
+
+# Private document error handling
 app.add_exception_handler(
     DocumentError,
     document_error_handler,
 )
 
-app.include_router(api_router, prefix=settings.api_v1_prefix)
+# Register API routes only once
+app.include_router(
+    api_router,
+    prefix=settings.api_v1_prefix,
+)
 
 @app.get("/health", tags=["health"])
 async def health_check() -> dict[str, str]:
