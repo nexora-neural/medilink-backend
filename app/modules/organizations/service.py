@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import Request
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.audit.models import AuditEvent
@@ -185,9 +186,32 @@ async def request_membership(
         result = MembershipRead.model_validate(row)
         await session.commit()
         return result
+    except IntegrityError as exc:
+        await session.rollback()
+        if _is_membership_duplicate(exc):
+            raise _error(
+                request,
+                409,
+                "INVALID_STATE",
+                "A membership already exists for this organization and role.",
+            ) from exc
+        raise
     except Exception:
         await session.rollback()
         raise
+
+
+def _is_membership_duplicate(error: IntegrityError) -> bool:
+    original = error.orig
+    while original is not None:
+        constraint_name = getattr(original, "constraint_name", None)
+        diagnostic = getattr(original, "diag", None)
+        if constraint_name is None:
+            constraint_name = getattr(diagnostic, "constraint_name", None)
+        if constraint_name == "uq_membership_org_user_role":
+            return True
+        original = getattr(original, "__cause__", None) or getattr(original, "__context__", None)
+    return False
 
 
 async def admin_list_organizations(

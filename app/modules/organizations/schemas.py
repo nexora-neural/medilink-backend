@@ -1,15 +1,21 @@
 """Request and response schemas for organizations and memberships."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class OrganizationInput(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     type: str = Field(pattern="^(clinic|hospital|pharmacy|laboratory|other)$")
     registration_ref: str | None = Field(default=None, max_length=100)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def trim_name(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
 
 
 class MembershipInput(BaseModel):
@@ -21,10 +27,20 @@ class OrganizationDecision(BaseModel):
     status: str = Field(pattern="^(active|suspended|rejected|inactive)$")
     reason: str = Field(min_length=1, max_length=1000)
 
+    @field_validator("reason", mode="before")
+    @classmethod
+    def trim_reason(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
 
 class MembershipDecision(BaseModel):
     status: str = Field(pattern="^(approved|rejected|more_info_requested|suspended)$")
     reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def trim_reason(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
 
 
 class OrganizationRead(BaseModel):
@@ -39,6 +55,8 @@ class OrganizationRead(BaseModel):
 
 
 class OrganizationPublic(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     name: str
     type: str
