@@ -29,6 +29,7 @@ async def _validate(request: Request,
 @router.post("/patients/{patient_id}/documents", response_model=DocumentRead,
              status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(require_upload_rate_limit)])
+
 async def upload_patient_document(
     patient_id: UUID, request: Request, db: DB, actor: Actor,
     file: Annotated[UploadFile, File()],
@@ -36,20 +37,30 @@ async def upload_patient_document(
     upload_request_id: Annotated[UUID | None, Form()] = None,
     verification_application_id: Annotated[UUID | None, Form()] = None,
     supersedes_id: Annotated[UUID | None, Form()] = None,
+    correction_reason: Annotated[str | None, Form()] = None,
 ):
     media_type = await _validate(request, file)
     if isinstance(media_type, JSONResponse):
         return media_type
     return await service.upload_document(
-        db, actor, file, media_type, document_type, request.state.request_id,
-        patient_id=patient_id, upload_request_id=upload_request_id,
-        verification_application_id=verification_application_id, supersedes_id=supersedes_id,
+        db,
+        actor,
+        file,
+        media_type,
+        document_type,
+        request.state.request_id,
+        patient_id=patient_id,
+        upload_request_id=upload_request_id,
+        verification_application_id=verification_application_id,
+        supersedes_id=supersedes_id,
+        correction_reason=correction_reason,
     )
 
 
 @router.post("/me/verification-documents", response_model=DocumentRead,
              status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(require_upload_rate_limit)])
+
 async def upload_verification_document(
     request: Request, db: DB, actor: Actor,
     file: Annotated[UploadFile, File()],

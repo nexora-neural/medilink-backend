@@ -23,7 +23,13 @@ from app.modules.identity.authorization import (
     require_verified_membership,
 )
 from app.modules.identity.models import Role, User, UserRole
-from app.modules.laboratory.models import ReportStatus
+from app.modules.laboratory.models import (
+    LabUploadRequest,
+    Report,
+    ReportIdentity,
+    ReportStatus,
+    UploadRequestStatus,
+)
 from app.modules.profiles.models import PatientProfile, ProfessionalProfile
 from app.modules.verification.models import VerificationApplicationDocument
 
@@ -149,9 +155,10 @@ async def _lab_allowed(
             "Lab upload request is required.",
         )
 
-    original_report = await repository.report_for_document(
-        db,
-        supersedes_id,
+    original_report = await db.scalar(
+        select(Report)
+        .where(Report.document_id == supersedes_id)
+        .with_for_update()
     )
 
     if (
@@ -172,6 +179,122 @@ async def _lab_allowed(
         original_report.laboratory_id,
     )
 
+async def _persist_lab_report(
+    db: AsyncSession,
+    user: User,
+    doc: Document,
+    *,
+    patient_id: UUID,
+    upload_request_id: UUID | None,
+    supersedes_id: UUID | None,
+    correction_reason: str | None,
+) -> None:
+    """Persist laboratory report and its lineage in the upload transaction."""
+
+    now = datetime.now(UTC)
+
+    if upload_request_id is not None:
+        req = await repository.lab_request(db, upload_request_id)
+
+        if (
+            req is None
+            or req.patient_user_id != patient_id
+            or req.status != UploadRequestStatus.ACTIVE
+            or req.expires_at <= now
+        ):
+            _reject(
+                409,
+                "INVALID_STATE",
+                "Upload request is no longer active.",
+            )
+
+        # The request row is already locked by repository.lab_request().
+        identity = ReportIdentity(
+            id=uuid4(),
+            patient_user_id=patient_id,
+            laboratory_id=req.laboratory_id,
+            lab_reference=f"upload-{req.id}",
+            initial_upload_request_id=req.id,
+        )
+        db.add(identity)
+
+        report = Report(
+            id=uuid4(),
+            patient_user_id=patient_id,
+            laboratory_id=req.laboratory_id,
+            report_identity_id=identity.id,
+            upload_request_id=req.id,
+            document_id=doc.id,
+            report_type="report",
+            report_date=None,
+            notes=None,
+            source=RecordSource.LAB_STAFF.value,
+            uploaded_by=user.id,
+            status=ReportStatus.ACTIVE,
+            supersedes_id=None,
+            correction_reason=None,
+        )
+        db.add(report)
+
+        req.status = UploadRequestStatus.USED
+        req.used_at = now
+        return
+
+    if supersedes_id is None:
+        _reject(
+            422,
+            "VALIDATION_ERROR",
+            "Lab upload request or correction reference is required.",
+        )
+
+    reason = (correction_reason or "").strip()
+    if not reason:
+        _reject(
+            422,
+            "VALIDATION_ERROR",
+            "Correction reason is required.",
+        )
+
+    # Lock the previous report while checking and updating its state.
+    previous_report = await db.scalar(
+        select(Report)
+        .where(Report.document_id == supersedes_id)
+        .with_for_update()
+    )
+
+    if (
+        previous_report is None
+        or previous_report.patient_user_id != patient_id
+        or previous_report.laboratory_id is None
+        or previous_report.status != ReportStatus.ACTIVE
+    ):
+        _reject(
+            409,
+            "INVALID_STATE",
+            "Previous report cannot be corrected.",
+        )
+
+    # _lab_allowed() has already verified membership for this laboratory.
+    replacement = Report(
+        id=uuid4(),
+        patient_user_id=previous_report.patient_user_id,
+        laboratory_id=previous_report.laboratory_id,
+        report_identity_id=previous_report.report_identity_id,
+        upload_request_id=None,
+        document_id=doc.id,
+        report_type=previous_report.report_type,
+        report_date=previous_report.report_date,
+        notes=previous_report.notes,
+        source=RecordSource.LAB_STAFF.value,
+        uploaded_by=user.id,
+        status=ReportStatus.ACTIVE,
+        supersedes_id=previous_report.id,
+        correction_reason=reason,
+    )
+
+    db.add(replacement)
+    previous_report.status = ReportStatus.SUPERSEDED
+
 
 async def upload_document(
     db: AsyncSession,
@@ -185,14 +308,21 @@ async def upload_document(
     upload_request_id: UUID | None = None,
     verification_application_id: UUID | None = None,
     supersedes_id: UUID | None = None,
+    correction_reason: str | None = None,
 ) -> Document:
 
-    if document_type not in ALLOWED_TYPES:
-        _reject(
-            422,
-            "VALIDATION_ERROR",
-            "Invalid document type.",
-        )
+    if correction_reason is not None:
+        if (
+                document_type != "report"
+                or patient_id is None
+                or supersedes_id is None
+                or upload_request_id is not None
+        ):
+            _reject(
+                422,
+                "VALIDATION_ERROR",
+                "Invalid correction context.",
+            )
 
     if user.status not in {"active", "pending"}:
         _reject(
@@ -415,6 +545,21 @@ async def upload_document(
         )
 
         db.add(doc)
+
+        if (
+                patient_id is not None
+                and user.id != patient_id
+                and document_type == "report"
+        ):
+            await _persist_lab_report(
+                db,
+                user,
+                doc,
+                patient_id=patient_id,
+                upload_request_id=upload_request_id,
+                supersedes_id=supersedes_id,
+                correction_reason=correction_reason,
+            )
 
         if previous is not None:
             previous.status = DocumentStatus.SUPERSEDED
