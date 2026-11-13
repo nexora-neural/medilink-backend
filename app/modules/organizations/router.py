@@ -73,6 +73,13 @@ async def get_admin_organizations(
     )
 
 
+@router.get("/admin/organizations/{organization_id}", response_model=OrganizationRead)
+async def get_admin_organization(
+    organization_id: UUID, request: Request, db: Session, actor: Actor
+):
+    return await service.admin_get_organization(db, actor, request, organization_id)
+
+
 @router.get("/admin/memberships", response_model=MembershipReadPage)
 async def get_admin_memberships(
     request: Request,

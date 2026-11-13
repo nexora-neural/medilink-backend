@@ -241,6 +241,16 @@ async def admin_list_organizations(
     )
 
 
+async def admin_get_organization(
+    session: AsyncSession, user: User, request: Request, organization_id: UUID
+):
+    await _require_super_admin(session, user, request)
+    row = await repository.get_organization(session, organization_id)
+    if row is None:
+        raise _error(request, 404, "RESOURCE_NOT_FOUND", "Organization not found.")
+    return OrganizationRead.model_validate(row)
+
+
 async def admin_list_memberships(
     session: AsyncSession,
     user: User,
