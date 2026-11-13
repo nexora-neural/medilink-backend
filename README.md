@@ -168,6 +168,29 @@ Firebase identifiers and creates no Firebase accounts or login credentials. Exis
 are not overwritten; rerunning the command does not duplicate the seeded identities.
 The verification tables from the verification migration must be present first.
 
+### Local Firebase test-account role seeding
+
+Each developer can link an existing shared Firebase test account to their own local
+database without copying passwords into the database or repository. Set
+`FIREBASE_PROJECT_ID` and `FIREBASE_WEB_API_KEY` in the local `.env`, apply migrations,
+then run one command per account:
+
+```sh
+python -m app.database.seed_test_account --role patient --email medilink.test.patient@example.com
+python -m app.database.seed_test_account --role doctor --email medilink.test.doctor@example.com
+python -m app.database.seed_test_account --role pharmacist --email medilink.test.pharmacist@example.com
+python -m app.database.seed_test_account --role lab_staff --email medilink.test.lab_staff@example.com
+python -m app.database.seed_test_account --role admin --email medilink.test.admin@example.com --allow-privileged-role
+python -m app.database.seed_test_account --role super_admin --email medilink.test.super_admin@example.com --allow-privileged-role
+```
+
+The command prompts for the Firebase password without echoing it, signs in to the
+configured Firebase project to obtain the UID, and stores only the UID, email, role,
+and required local profile row. It is restricted to local, development and test
+environments. Patient profile values are synthetic. Professional profiles remain
+`not_submitted`; this command does not grant professional verification. Admin roles
+require an explicit flag and should only be used against a local/test database.
+
 ### Patient onboarding
 
 `POST /api/v1/me/onboard` requires a verified Firebase bearer token, `display_name`,
