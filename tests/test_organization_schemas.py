@@ -57,13 +57,14 @@ class OrganizationSchemaTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             MembershipInput(organization_id=uuid4(), role="admin")
 
-    def test_all_seven_contract_routes_are_registered(self):
+    def test_all_eight_contract_routes_are_registered(self):
         paths = {(route.path, tuple(sorted(route.methods or []))) for route in router.routes}
         expected = {
             ("/organizations", ("GET",)),
             ("/organizations", ("POST",)),
             ("/me/memberships", ("POST",)),
             ("/admin/organizations", ("GET",)),
+            ("/admin/organizations/{organization_id}", ("GET",)),
             ("/admin/memberships", ("GET",)),
             ("/admin/organizations/{organization_id}/decision", ("POST",)),
             ("/admin/memberships/{membership_id}/decision", ("POST",)),
@@ -103,6 +104,65 @@ class OrganizationPopulatedListRouteTests(IsolatedAsyncioTestCase):
             response.json()["items"],
             [{"id": str(organization.id), "name": "Central Clinic", "type": "clinic"}],
         )
+
+    async def test_admin_organization_detail_returns_the_requested_record(self):
+        organization = SimpleNamespace(
+            id=uuid4(),
+            name="Central Clinic",
+            type="clinic",
+            registration_ref="REG-123",
+            status="active",
+            created_at="2026-11-01T10:00:00Z",
+            updated_at="2026-11-02T10:00:00Z",
+        )
+        with patch(
+            "app.modules.organizations.service.admin_get_organization",
+            new=AsyncMock(return_value=organization),
+        ) as get_organization:
+            response = await self.client.get(
+                f"/api/v1/admin/organizations/{organization.id}"
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["id"], str(organization.id))
+        self.assertEqual(response.json()["status"], "active")
+        get_organization.assert_awaited_once()
+
+    async def test_admin_organization_detail_denies_non_super_admin(self):
+        organization_id = uuid4()
+        with (
+            patch(
+                "app.modules.organizations.service._has_role",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "app.modules.organizations.service.repository.get_organization",
+                new=AsyncMock(),
+            ) as get_organization,
+        ):
+            response = await self.client.get(f"/api/v1/admin/organizations/{organization_id}")
+
+        self.assertEqual(response.status_code, 403, response.text)
+        self.assertEqual(response.json()["code"], "ACCESS_DENIED")
+        get_organization.assert_not_awaited()
+
+    async def test_admin_organization_detail_returns_not_found_for_unknown_id(self):
+        organization_id = uuid4()
+        with (
+            patch(
+                "app.modules.organizations.service._has_role",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "app.modules.organizations.service.repository.get_organization",
+                new=AsyncMock(return_value=None),
+            ) as get_organization,
+        ):
+            response = await self.client.get(f"/api/v1/admin/organizations/{organization_id}")
+
+        self.assertEqual(response.status_code, 404, response.text)
+        self.assertEqual(response.json()["code"], "RESOURCE_NOT_FOUND")
+        get_organization.assert_awaited_once()
 
 
 if __name__ == "__main__":
