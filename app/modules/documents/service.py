@@ -311,12 +311,20 @@ async def upload_document(
     correction_reason: str | None = None,
 ) -> Document:
 
+
+    if document_type not in ALLOWED_TYPES:
+        _reject(
+            422,
+            "VALIDATION_ERROR",
+            "Invalid document type.",
+        )
+
     if correction_reason is not None:
         if (
-                document_type != "report"
-                or patient_id is None
-                or supersedes_id is None
-                or upload_request_id is not None
+            document_type != "report"
+            or patient_id is None
+            or supersedes_id is None
+            or upload_request_id is not None
         ):
             _reject(
                 422,
@@ -330,6 +338,7 @@ async def upload_document(
             "ACCESS_DENIED",
             "Account is not eligible.",
         )
+
 
     if patient_id is None:
         if (
