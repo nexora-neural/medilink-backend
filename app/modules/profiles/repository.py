@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.identity.models import Role, UserRole
+from app.modules.identity.repository import get_roles
 from app.modules.organizations.models import OrganizationMembership
 from app.modules.profiles.models import PatientProfile
 from app.modules.profiles.schemas import PatientProfileUpdateRequest
@@ -78,14 +78,8 @@ async def get_user_role_codes(
     user_id: UUID,
 ) -> list[str]:
     """Return the role codes assigned to the given user."""
-    query = (
-        select(Role.code)
-        .join(UserRole, UserRole.role_id == Role.id)
-        .where(UserRole.user_id == user_id)
-        .order_by(Role.code)
-    )
-    result = await session.scalars(query)
-    return list(result.all())
+    return sorted(await get_roles(session, user_id))
+
 
 async def get_user_memberships(
     session: AsyncSession,

@@ -1,7 +1,4 @@
-"""SQLAlchemy ORM models for identity and authentication."""
-
-"""SQLAlchemy ORM models for identity and authentication."""
-"""Database models for users, roles and user-role assignments."""
+"""Database models for users, role assignments and support decisions."""
 
 from datetime import datetime
 from uuid import UUID
@@ -103,3 +100,21 @@ class UserRole(Base):
     assigned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(),
     )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AccountSupportDecisionReason(Base):
+    """Private reason for an append-only account support audit event."""
+
+    __tablename__ = "account_support_decision_reasons"
+
+    audit_event_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey(
+            "audit_events.id",
+            name="account_support_decision_reasons_audit_event_id_fkey",
+            ondelete="RESTRICT",
+        ),
+        primary_key=True,
+    )
+    reason: Mapped[str] = mapped_column(Text)
