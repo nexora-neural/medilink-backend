@@ -4,7 +4,11 @@ import json
 from sqlalchemy import text
 
 from .repository import (
-    GRANT_ACCESS, fetch_one, insert_reading, lock_owned_reading, mark_superseded,
+    GRANT_ACCESS,
+    fetch_one,
+    insert_reading,
+    lock_owned_reading,
+    mark_superseded,
 )
 from .schemas import MeasurementsRead
 
@@ -25,7 +29,11 @@ async def measurement_access(db, actor, patient, *, write=False, consultation=No
         raise MeasurementError(404, "NOT_FOUND", "Patient record not found.")
     if actor["id"] == patient and actor["is_patient"]:
         if consultation is not None:
-            raise MeasurementError(422, "VALIDATION_ERROR", "Omit consultation_id for a patient entry.")
+            raise MeasurementError(
+                422,
+                "VALIDATION_ERROR",
+                "Omit consultation_id for a patient entry.",
+            )
         return "patient"
     if not actor["is_verified_doctor"]:
         if actor["is_doctor"]:
@@ -43,7 +51,11 @@ async def measurement_access(db, actor, patient, *, write=False, consultation=No
         raise MeasurementError(403, "FORBIDDEN", "Patient account is inactive.")
     if write:
         if consultation is None:
-            raise MeasurementError(422, "VALIDATION_ERROR", "consultation_id is required for doctors.")
+            raise MeasurementError(
+                422,
+                "VALIDATION_ERROR",
+                "consultation_id is required for doctors.",
+            )
         permitted = await fetch_one(db, f"""
             SELECT c.id FROM consultations c JOIN access_grants g ON g.id = c.grant_id
             JOIN grant_categories gc ON gc.grant_id = g.id
@@ -54,7 +66,11 @@ async def measurement_access(db, actor, patient, *, write=False, consultation=No
             FOR SHARE OF c, g, gc
         """, **params, consultation=consultation)
         if permitted is None:
-            raise MeasurementError(403, "FORBIDDEN", "An active authorized consultation is required.")
+            raise MeasurementError(
+                403,
+                "FORBIDDEN",
+                "An active authorized consultation is required.",
+            )
     return "doctor"
 
 
@@ -100,7 +116,11 @@ async def correct_measurement(db, actor, measurement_id, body, key, request_id, 
     """, **scope)
     if previous is not None:
         if previous["request_digest"] != digest:
-            raise MeasurementError(409, "IDEMPOTENCY_CONFLICT", "This key was used with a different request.")
+            raise MeasurementError(
+                409,
+                "IDEMPOTENCY_CONFLICT",
+                "This key was used with a different request.",
+            )
         return MeasurementsRead.model_validate(previous["response_body"])
     if original["status"] != "active":
         raise MeasurementError(409, "STALE_VERSION", "Reload and correct the current version.")

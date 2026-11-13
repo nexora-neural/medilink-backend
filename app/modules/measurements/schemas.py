@@ -4,7 +4,12 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import (
-    AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
 )
 
 MeasurementType = Literal["weight", "blood_pressure", "blood_glucose"]
