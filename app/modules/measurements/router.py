@@ -2,26 +2,29 @@ import logging
 from typing import Annotated
 from uuid import UUID, uuid4
 
-import firebase_admin
 from fastapi import APIRouter, Depends, Header, Query, Request
-from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from firebase_admin import auth
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.session import get_session
+from app.modules.identity.auth import AuthenticationError, get_verified_identity
 
 from .repository import fetch_one, list_active
 from .schemas import (
-    MeasurementCorrectionInput, MeasurementInput, MeasurementType,
-    MeasurementsRead, MeasurementsReadPage,
+    MeasurementCorrectionInput,
+    MeasurementInput,
+    MeasurementsRead,
+    MeasurementsReadPage,
+    MeasurementType,
 )
 from .service import (
-    MeasurementError, correct_measurement, create_measurement, measurement_access,
+    MeasurementError,
+    correct_measurement,
+    create_measurement,
+    measurement_access,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,6 +50,8 @@ class MeasurementRoute(APIRoute):
                 response = await handler(request)
                 response.headers.update(headers)
                 return response
+            except AuthenticationError:
+                raise
             except MeasurementError as exc:
                 status, code, message = exc.status, exc.code, str(exc)
             except RequestValidationError as exc:
@@ -75,24 +80,11 @@ router = APIRouter(
     tags=["Measurements"], route_class=MeasurementRoute,
     responses={code: {"model": Error} for code in (400, 401, 403, 404, 409, 422, 429, 500)},
 )
-bearer = HTTPBearer(scheme_name="FirebaseBearer", auto_error=False)
 Database = Annotated[AsyncSession, Depends(get_session)]
 
 
-async def authenticated_uid(
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
-) -> str:
-    if credentials is None:
-        raise MeasurementError(401, "UNAUTHENTICATED", "A Firebase ID token is required.")
-    firebase_app = firebase_admin.get_app()
-    try:
-        claims = await run_in_threadpool(
-            auth.verify_id_token, credentials.credentials, app=firebase_app, check_revoked=True,
-        )
-    except (auth.InvalidIdTokenError, auth.ExpiredIdTokenError,
-            auth.RevokedIdTokenError, auth.UserDisabledError, auth.UserNotFoundError) as exc:
-        raise MeasurementError(401, "UNAUTHENTICATED", "The Firebase ID token is invalid.") from exc
-    return claims["uid"]
+async def authenticated_uid(identity: Annotated[dict, Depends(get_verified_identity)]) -> str:
+    return identity["uid"]
 
 
 FirebaseUID = Annotated[str, Depends(authenticated_uid)]
