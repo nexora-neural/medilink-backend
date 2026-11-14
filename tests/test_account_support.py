@@ -230,3 +230,51 @@ class AccountSupportTests(IsolatedAsyncioTestCase):
         patient = await self.session.get(User, patient_id)
         self.assertEqual(patient.status, "active")
         self.assertIsNone(await self.event_for(response))
+
+    async def test_search_reports_current_admin_assignments(self):
+        response = await self.client.get(USERS, params={"q": "ML35 Sample", "page_size": 100})
+        self.assertEqual(response.status_code, 200, response.text)
+
+        accounts = {item["id"]: item for item in response.json()["items"]}
+        self.assertIs(accounts[str(self.patient.id)]["is_admin"], False)
+        self.assertIs(accounts[str(self.admin.id)]["is_admin"], True)
+        self.assertIs(accounts[str(self.super_admin.id)]["is_admin"], False)
+
+    async def test_admin_state_is_refreshed_after_appointment_and_revocation(self):
+        self.actor = self.super_admin
+        patient_id = str(self.patient.id)
+        reason = {"reason": "Synthetic role-state verification"}
+
+        response = await self.client.post(
+            APPOINT,
+            json={"user_id": patient_id, "role": "admin", **reason},
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+
+        response = await self.client.get(USERS, params={"q": patient_id})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIs(response.json()["items"][0]["is_admin"], True)
+
+        response = await self.client.post(
+            f"{USERS}/{patient_id}/status",
+            json={"status": "suspended", **reason},
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertIs(response.json()["is_admin"], True)
+
+        response = await self.client.post(
+            f"{USERS}/{patient_id}/admin-role/revoke",
+            json=reason,
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+
+        response = await self.client.get(USERS, params={"q": patient_id})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIs(response.json()["items"][0]["is_admin"], False)
+
+        response = await self.client.post(
+            f"{USERS}/{patient_id}/status",
+            json={"status": "active", **reason},
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertIs(response.json()["is_admin"], False)

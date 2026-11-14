@@ -72,3 +72,23 @@ async def count_active_super_admins(session: AsyncSession) -> int:
             Role.code == "super_admin",
         )
     )
+
+
+async def get_admin_user_ids(
+    session: AsyncSession,
+    user_ids: list[UUID],
+) -> set[UUID]:
+    """Return users with a current, non-revoked Admin assignment."""
+    if not user_ids:
+        return set()
+
+    result = await session.scalars(
+        select(UserRole.user_id)
+        .join(Role, Role.id == UserRole.role_id)
+        .where(
+            UserRole.user_id.in_(user_ids),
+            UserRole.revoked_at.is_(None),
+            Role.code == "admin",
+        )
+    )
+    return set(result.all())
