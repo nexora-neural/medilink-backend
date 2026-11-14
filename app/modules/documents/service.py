@@ -8,13 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from fastapi import HTTPException, UploadFile
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.modules.audit.models import AuditEvent
 from app.modules.consent.models import AccessGrant, GrantCategory
-from app.modules.documents import repository, storage
 from app.modules.documents.enum import DocumentStatus, RecordSource
 from app.modules.documents.errors import DocumentError
 from app.modules.documents.models import Document
@@ -31,6 +26,11 @@ from app.modules.laboratory.models import (
 )
 from app.modules.profiles.models import PatientProfile, ProfessionalProfile
 from app.modules.verification.models import VerificationApplicationDocument
+from fastapi import HTTPException, UploadFile
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.modules.documents import repository, storage
 
 logger = logging.getLogger(__name__)
 
