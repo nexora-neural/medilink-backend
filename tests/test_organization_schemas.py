@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from app.database.session import get_session
 from app.main import app
 from app.modules.identity.auth import get_current_user
+from app.modules.organizations import service as organization_service
 from app.modules.organizations.router import router
 from app.modules.organizations.schemas import (
     MembershipDecision,
@@ -104,6 +105,25 @@ class OrganizationPopulatedListRouteTests(IsolatedAsyncioTestCase):
             response.json()["items"],
             [{"id": str(organization.id), "name": "Central Clinic", "type": "clinic"}],
         )
+
+    async def test_revoked_super_admin_assignment_does_not_authorize_organization_admin(self):
+        actor_id = uuid4()
+
+        class RevokedRoleSession:
+            async def scalar(self, statement):
+                sql = str(statement.compile(compile_kwargs={"literal_binds": True}))
+                self_test.assertIn("user_roles.revoked_at IS NULL", sql)
+                return None
+
+        self_test = self
+        session = RevokedRoleSession()
+        actor = SimpleNamespace(id=actor_id, status="active")
+        request = SimpleNamespace(state=SimpleNamespace(request_id="req-revoked-admin"))
+
+        with self.assertRaises(organization_service.AuthenticationError) as raised:
+            await organization_service._require_super_admin(session, actor, request)
+
+        self.assertEqual(raised.exception.status_code, 403)
 
     async def test_admin_organization_detail_returns_the_requested_record(self):
         organization = SimpleNamespace(
