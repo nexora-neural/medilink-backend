@@ -2,12 +2,6 @@ import logging
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-
 from app.api.router import api_router
 from app.core.config import settings
 from app.core.rate_limits import (
@@ -23,6 +17,11 @@ from app.modules.documents.errors import (
     document_error_handler,
 )
 from app.modules.identity.auth import AuthenticationError
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
