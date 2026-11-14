@@ -3,6 +3,8 @@ import json
 
 from sqlalchemy import text
 
+from app.modules.audit.service import append_event
+
 from .repository import (
     GRANT_ACCESS,
     fetch_one,
@@ -75,13 +77,16 @@ async def measurement_access(db, actor, patient, *, write=False, consultation=No
 
 
 async def audit(db, actor, action, reading, request_id, metadata):
-    await db.execute(text("""
-        INSERT INTO audit_events
-            (actor_user_id, action, target_type, target_id, outcome, request_id, metadata)
-        VALUES (:actor, :action, 'measurement', :target, 'success', :request_id,
-                CAST(:metadata AS jsonb))
-    """), dict(actor=actor, action=action, target=reading.id,
-               request_id=request_id, metadata=json.dumps(metadata)))
+    await append_event(
+        db,
+        actor_user_id=actor,
+        action=action,
+        target_type="measurement",
+        target_id=reading.id,
+        outcome="success",
+        request_id=request_id,
+        metadata=metadata,
+    )
 
 
 async def create_measurement(db, actor, patient, body, request_id):

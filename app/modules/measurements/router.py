@@ -42,7 +42,8 @@ class MeasurementRoute(APIRoute):
         handler = super().get_route_handler()
 
         async def handle(request: Request):
-            request_id = str(uuid4())
+            request_id = getattr(request.state, "request_id", None) or str(uuid4())
+            request.state.request_id = request_id
             request.state.measurement_request_id = request_id
             headers = {"X-Request-ID": request_id, "Cache-Control": "no-store"}
             fields = {}

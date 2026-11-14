@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.audit.models import AuditEvent
+from app.modules.audit.service import append_event
 from app.modules.identity.auth import AuthenticationError
 from app.modules.identity.models import Role, User, UserRole
 from app.modules.organizations import repository
@@ -112,16 +112,15 @@ async def submit_organization(
     try:
         session.add(row)
         await session.flush()
-        session.add(
-            AuditEvent(
-                actor_user_id=user.id,
-                action="organization.submitted",
-                target_type="organization",
-                target_id=row.id,
-                outcome="success",
-                request_id=request.state.request_id,
-                metadata_={"type": row.type},
-            )
+        await append_event(
+            session,
+            actor_user_id=user.id,
+            action="organization.submitted",
+            target_type="organization",
+            target_id=row.id,
+            outcome="success",
+            request_id=request.state.request_id,
+            metadata={"type": row.type},
         )
         result = OrganizationRead.model_validate(row)
         await session.commit()
@@ -172,16 +171,15 @@ async def request_membership(
             )
             session.add(row)
         await session.flush()
-        session.add(
-            AuditEvent(
-                actor_user_id=user.id,
-                action="membership.requested",
-                target_type="organization_membership",
-                target_id=row.id,
-                outcome="success",
-                request_id=request.state.request_id,
-                metadata_={"organization_id": str(org.id), "role": payload.role},
-            )
+        await append_event(
+            session,
+            actor_user_id=user.id,
+            action="membership.requested",
+            target_type="organization_membership",
+            target_id=row.id,
+            outcome="success",
+            request_id=request.state.request_id,
+            metadata={"organization_id": str(org.id), "role": payload.role},
         )
         result = MembershipRead.model_validate(row)
         await session.commit()
@@ -298,16 +296,15 @@ async def decide_organization(
         row.status = payload.status
         await session.flush()
         await session.refresh(row)
-        session.add(
-            AuditEvent(
-                actor_user_id=user.id,
-                action="organization.decision",
-                target_type="organization",
-                target_id=row.id,
-                outcome="success",
-                request_id=request.state.request_id,
-                metadata_={"status": payload.status, "reason": payload.reason},
-            )
+        await append_event(
+            session,
+            actor_user_id=user.id,
+            action="organization.decision",
+            target_type="organization",
+            target_id=row.id,
+            outcome="success",
+            request_id=request.state.request_id,
+            metadata={"status": payload.status},
         )
         result = OrganizationRead.model_validate(row)
         await session.commit()
@@ -336,16 +333,15 @@ async def decide_membership(
         row.status = payload.status
         row.verified_at = datetime.now(UTC) if payload.status == "approved" else None
         await session.flush()
-        session.add(
-            AuditEvent(
-                actor_user_id=user.id,
-                action="membership.decision",
-                target_type="organization_membership",
-                target_id=row.id,
-                outcome="success",
-                request_id=request.state.request_id,
-                metadata_={"status": payload.status, "reason": payload.reason},
-            )
+        await append_event(
+            session,
+            actor_user_id=user.id,
+            action="membership.decision",
+            target_type="organization_membership",
+            target_id=row.id,
+            outcome="success",
+            request_id=request.state.request_id,
+            metadata={"status": payload.status},
         )
         result = MembershipRead.model_validate(row)
         await session.commit()
