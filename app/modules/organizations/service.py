@@ -97,7 +97,7 @@ async def submit_organization(
         await session.scalars(
             select(Role.code)
             .join(UserRole, Role.id == UserRole.role_id)
-            .where(UserRole.user_id == user.id)
+            .where(UserRole.user_id == user.id, UserRole.revoked_at.is_(None))
         )
     ).all()
     profile = await session.get(ProfessionalProfile, user.id)
