@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.audit.service import append_event
 from app.modules.identity.auth import AuthenticationError
-from app.modules.identity.models import Role, User, UserRole
+from app.modules.identity.models import AccountSupportDecisionReason, Role, User, UserRole
 from app.modules.organizations import repository
 from app.modules.organizations.models import Organization, OrganizationMembership
 from app.modules.organizations.schemas import (
@@ -296,7 +296,7 @@ async def decide_organization(
         row.status = payload.status
         await session.flush()
         await session.refresh(row)
-        await append_event(
+        event = await append_event(
             session,
             actor_user_id=user.id,
             action="organization.decision",
@@ -304,8 +304,10 @@ async def decide_organization(
             target_id=row.id,
             outcome="success",
             request_id=request.state.request_id,
-            metadata={"status": payload.status},
         )
+        session.add(AccountSupportDecisionReason(
+            audit_event_id=event.id, reason=payload.reason
+        ))
         result = OrganizationRead.model_validate(row)
         await session.commit()
         return result
@@ -333,7 +335,7 @@ async def decide_membership(
         row.status = payload.status
         row.verified_at = datetime.now(UTC) if payload.status == "approved" else None
         await session.flush()
-        await append_event(
+        event = await append_event(
             session,
             actor_user_id=user.id,
             action="membership.decision",
@@ -341,8 +343,10 @@ async def decide_membership(
             target_id=row.id,
             outcome="success",
             request_id=request.state.request_id,
-            metadata={"status": payload.status},
         )
+        session.add(AccountSupportDecisionReason(
+            audit_event_id=event.id, reason=payload.reason
+        ))
         result = MembershipRead.model_validate(row)
         await session.commit()
         return result

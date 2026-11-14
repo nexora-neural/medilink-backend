@@ -91,7 +91,7 @@ async def authenticated_uid(identity: Annotated[dict, Depends(get_verified_ident
 FirebaseUID = Annotated[str, Depends(authenticated_uid)]
 
 
-async def active_actor(db, uid):
+async def active_actor(db, uid, request: Request):
     actor = await fetch_one(db, """
         SELECT u.id, u.status,
             EXISTS (
@@ -111,6 +111,8 @@ async def active_actor(db, uid):
         FROM users u WHERE u.firebase_uid = :uid
         FOR SHARE OF u
     """, uid=uid)
+    if actor is not None:
+        request.state.audit_actor_user_id = actor["id"]
     if actor is None or actor["status"] != "active":
         raise MeasurementError(403, "FORBIDDEN", "An active MediLink account is required.")
     return actor
@@ -145,10 +147,10 @@ class MeasurementFilters(BaseModel):
             response_model=MeasurementsReadPage, operation_id="medilink_031")
 async def list_measurements(
     patient_id: UUID, filters: Annotated[MeasurementFilters, Query()],
-    db: Database, uid: FirebaseUID,
+    db: Database, uid: FirebaseUID, request: Request,
 ):
     async with db.begin():
-        actor = await active_actor(db, uid)
+        actor = await active_actor(db, uid, request)
         await measurement_access(db, actor, patient_id)
         page = await list_active(
             db, patient_id, filters.type, filters.start, filters.end,
@@ -164,7 +166,7 @@ async def post_measurement(
     db: Database, uid: FirebaseUID,
 ):
     async with db.begin():
-        actor = await active_actor(db, uid)
+        actor = await active_actor(db, uid, request)
         return await create_measurement(
             db, actor, patient_id, body, request.state.measurement_request_id,
         )
@@ -179,7 +181,7 @@ async def post_correction(
     db: Database, uid: FirebaseUID,
 ):
     async with db.begin():
-        actor = await active_actor(db, uid)
+        actor = await active_actor(db, uid, request)
         return await correct_measurement(
             db, actor, measurement_id, body, key, request.state.measurement_request_id,
             await request.json(),
