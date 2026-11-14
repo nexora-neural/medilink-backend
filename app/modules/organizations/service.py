@@ -304,10 +304,11 @@ async def decide_organization(
             target_id=row.id,
             outcome="success",
             request_id=request.state.request_id,
+            metadata={"status": payload.status},
         )
-        session.add(AccountSupportDecisionReason(
-            audit_event_id=event.id, reason=payload.reason
-        ))
+        session.add(
+            AccountSupportDecisionReason(audit_event_id=event.id, reason=payload.reason)
+        )
         result = OrganizationRead.model_validate(row)
         await session.commit()
         return result
@@ -343,10 +344,11 @@ async def decide_membership(
             target_id=row.id,
             outcome="success",
             request_id=request.state.request_id,
+            metadata={"status": payload.status},
         )
-        session.add(AccountSupportDecisionReason(
-            audit_event_id=event.id, reason=payload.reason
-        ))
+        session.add(
+            AccountSupportDecisionReason(audit_event_id=event.id, reason=payload.reason)
+        )
         result = MembershipRead.model_validate(row)
         await session.commit()
         return result
