@@ -11,7 +11,9 @@ from pydantic import ValidationError
 
 from app.database.session import get_session
 from app.main import app
+from app.modules.audit.schemas import SAFE_METADATA_KEYS
 from app.modules.identity.auth import get_current_user
+from app.modules.identity.models import AccountSupportDecisionReason
 from app.modules.organizations.router import router
 from app.modules.organizations.schemas import (
     MembershipDecision,
@@ -22,6 +24,13 @@ from app.modules.organizations.schemas import (
 
 
 class OrganizationSchemaTests(unittest.TestCase):
+    def test_decision_reasons_use_separate_protected_storage_model(self):
+        self.assertEqual(
+            AccountSupportDecisionReason.__table__.c.audit_event_id.foreign_keys.pop().target_fullname,
+            "audit_events.id",
+        )
+        self.assertNotIn("reason", SAFE_METADATA_KEYS)
+
     def test_organization_input_trims_in_service_and_rejects_invalid_type(self):
         payload = OrganizationInput(name="  Clinic  ", type="clinic")
         self.assertEqual(payload.name, "Clinic")
