@@ -17,6 +17,7 @@ class UsersRead(BaseModel):
     display_name: str
     phone: str | None = None
     status: AccountStatus
+    is_admin: bool
     created_at: datetime
     updated_at: datetime
 

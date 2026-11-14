@@ -14,7 +14,12 @@ from app.modules.audit.models import AuditEvent
 from app.modules.identity.auth import AuthenticationError
 from app.modules.identity.enums import AccountStatus
 from app.modules.identity.models import AccountSupportDecisionReason, Role, User, UserRole
-from app.modules.identity.repository import count_active_super_admins, find_accounts, get_roles
+from app.modules.identity.repository import (
+    count_active_super_admins,
+    find_accounts,
+    get_admin_user_ids,
+    get_roles,
+)
 from app.modules.identity.schemas import AccountDecision, ActionResult, UsersRead, UsersReadPage
 
 PRIVILEGED_ROLES = {"admin", "super_admin"}
@@ -117,6 +122,19 @@ async def get_target_account(session: AsyncSession, user_id: UUID) -> User:
     return user
 
 
+def support_user_response(user: User, *, is_admin: bool) -> UsersRead:
+    return UsersRead(
+        id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        phone=user.phone,
+        status=user.status,
+        is_admin=is_admin,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+    )
+
+
 async def search_accounts(
     session: AsyncSession,
     request: Request,
@@ -132,9 +150,12 @@ async def search_accounts(
         users, total = await find_accounts(
             session, query=query, status=status, page=page, page_size=page_size
         )
+        admin_user_ids = await get_admin_user_ids(session, [user.id for user in users])
         event.metadata_ = {"result_count": len(users), "has_query": bool(query)}
         return UsersReadPage(
-            items=[UsersRead.model_validate(user) for user in users],
+            items=[
+                support_user_response(user, is_admin=user.id in admin_user_ids) for user in users
+            ],
             page=page,
             page_size=page_size,
             total=total,
@@ -177,7 +198,7 @@ async def decide_account_status(
         target.status = new_status
         target.updated_at = datetime.now(UTC)
         event.metadata_ = {"previous_status": previous_status.value, "status": new_status.value}
-        return UsersRead.model_validate(target)
+        return support_user_response(target, is_admin="admin" in target_roles)
 
 
 async def change_admin_assignment(
