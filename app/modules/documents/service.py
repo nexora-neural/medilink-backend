@@ -208,7 +208,7 @@ async def _persist_lab_report(
                 "Upload request is no longer active.",
             )
 
-        # The request row is already locked by repository.lab_request().
+
         identity = ReportIdentity(
             id=uuid4(),
             patient_user_id=patient_id,
@@ -217,6 +217,7 @@ async def _persist_lab_report(
             initial_upload_request_id=req.id,
         )
         db.add(identity)
+        await db.flush()
 
         report = Report(
             id=uuid4(),

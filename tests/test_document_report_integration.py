@@ -22,6 +22,7 @@ class TestLaboratoryReportPersistence(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.db = MagicMock()
         self.db.scalar = AsyncMock()
+        self.db.flush = AsyncMock()
 
         self.user = SimpleNamespace(id=uuid4())
         self.patient_id = uuid4()
