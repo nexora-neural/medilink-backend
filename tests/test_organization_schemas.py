@@ -30,9 +30,11 @@ class OrganizationSchemaTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             OrganizationInput(name="Clinic", type="unapproved")
 
-    def test_organization_registration_cannot_set_status(self):
-        payload = OrganizationInput(name="Clinic", type="clinic", status="active")
-        self.assertNotIn("status", payload.model_dump())
+    def test_organization_registration_rejects_unknown_fields_and_status(self):
+        base = {"name": "Clinic", "type": "clinic"}
+        for extra in ({"unknown_ml47": True}, {"status": "active"}):
+            with self.subTest(extra=extra), self.assertRaises(ValidationError):
+                OrganizationInput.model_validate({**base, **extra})
 
     def test_membership_and_decision_values_follow_contract(self):
         payload = MembershipInput(organization_id=uuid4(), role="lab_staff")
@@ -104,6 +106,20 @@ class OrganizationPopulatedListRouteTests(IsolatedAsyncioTestCase):
             response.json()["items"],
             [{"id": str(organization.id), "name": "Central Clinic", "type": "clinic"}],
         )
+
+    async def test_organization_registration_rejects_unknown_fields_before_service_call(self):
+        valid_fields = {"name": "Synthetic QA Clinic", "type": "clinic"}
+        with patch(
+            "app.modules.organizations.service.submit_organization",
+            new=AsyncMock(),
+        ) as submit_organization:
+            for extra in ({"unknown_ml47": True}, {"status": "active"}):
+                response = await self.client.post(
+                    "/api/v1/organizations", json={**valid_fields, **extra}
+                )
+                self.assertEqual(response.status_code, 422, response.text)
+
+        submit_organization.assert_not_awaited()
 
     async def test_admin_organization_detail_returns_the_requested_record(self):
         organization = SimpleNamespace(
