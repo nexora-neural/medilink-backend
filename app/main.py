@@ -2,12 +2,6 @@ import logging
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-
 from app.api.router import api_router
 from app.core.config import settings
 from app.core.rate_limits import (
@@ -18,7 +12,16 @@ from app.core.rate_limits import (
 )
 from app.database import models as _models  # noqa: F401 - register ORM metadata
 from app.database.session import check_database_connection, close_db, init_db
+from app.modules.documents.errors import (
+    DocumentError,
+    document_error_handler,
+)
 from app.modules.identity.auth import AuthenticationError
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -138,9 +141,27 @@ async def validation_error_handler(
     )
 
 
-app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
-app.add_exception_handler(RateLimitUnavailable, rate_limit_unavailable_handler)
-app.include_router(api_router, prefix=settings.api_v1_prefix)
+app.add_exception_handler(
+    RateLimitExceeded,
+    rate_limit_exceeded_handler,
+)
+
+app.add_exception_handler(
+    RateLimitUnavailable,
+    rate_limit_unavailable_handler,
+)
+
+# Private document error handling
+app.add_exception_handler(
+    DocumentError,
+    document_error_handler,
+)
+
+# Register API routes only once
+app.include_router(
+    api_router,
+    prefix=settings.api_v1_prefix,
+)
 
 
 @app.get("/health", tags=["health"])
