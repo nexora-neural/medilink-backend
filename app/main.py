@@ -18,11 +18,11 @@ from app.core.rate_limits import (
 )
 from app.database import models as _models  # noqa: F401 - register ORM metadata
 from app.database.session import check_database_connection, close_db, init_db
-from app.modules.identity.auth import AuthenticationError
 from app.modules.documents.errors import (
     DocumentError,
     document_error_handler,
 )
+from app.modules.identity.auth import AuthenticationError
 
 logger = logging.getLogger(__name__)
 
