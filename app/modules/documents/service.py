@@ -24,7 +24,6 @@ from app.modules.identity.authorization import (
 )
 from app.modules.identity.models import Role, User, UserRole
 from app.modules.laboratory.models import (
-    LabUploadRequest,
     Report,
     ReportIdentity,
     ReportStatus,
