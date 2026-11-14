@@ -1,12 +1,10 @@
 """Business rules and orchestration for prescriptions and OCR workflow."""
 
-
-
 from fastapi import Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.audit.models import AuditEvent
+from app.modules.audit.service import append_event
 from app.modules.identity.auth import AuthenticationError
 from app.modules.identity.models import User
 from app.modules.identity.repository import get_roles
@@ -53,9 +51,7 @@ async def require_medicine_reader(
     if "doctor" not in roles:
         raise forbidden(request)
 
-    professional = await session.get(
-        ProfessionalProfile, user.id
-    )
+    professional = await session.get(ProfessionalProfile, user.id)
 
     if (
         professional is None
@@ -135,10 +131,7 @@ async def list_medicines(
     )
 
     return MedicinesReadPage(
-        items=[
-            MedicinesRead.model_validate(medicine)
-            for medicine in medicines
-        ],
+        items=[MedicinesRead.model_validate(medicine) for medicine in medicines],
         page=page,
         page_size=page_size,
         total=total,
@@ -165,21 +158,16 @@ async def add_medicine(
             payload=payload,
         )
 
-        event = AuditEvent(
+        await append_event(
+            session,
             actor_user_id=user.id,
             action="medicine.created",
             target_type="medicines",
             target_id=medicine.id,
             outcome="success",
             request_id=request.state.request_id,
-            metadata_={
-                "is_sample": True,
-                "generic_name": medicine.generic_name,
-            },
+            metadata={"is_sample": True},
         )
-
-        session.add(event)
-        await session.flush()
 
         result = MedicinesRead.model_validate(medicine)
 
@@ -189,5 +177,3 @@ async def add_medicine(
     except Exception:
         await session.rollback()
         raise
-
-

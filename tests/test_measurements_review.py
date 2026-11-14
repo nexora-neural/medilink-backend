@@ -134,6 +134,38 @@ def setup_writes(test):
 
 
 class MeasurementsReviewTests(TestCase):
+    def test_active_actor_sets_request_audit_identity_before_authorization(self):
+        from types import SimpleNamespace
+
+        request = SimpleNamespace(state=SimpleNamespace())
+        actor = {"id": ACTOR, "status": "active"}
+
+        async def fetch(*args, **kwargs):
+            return actor
+
+        with patch.object(router, "fetch_one", fetch):
+            import asyncio
+            result = asyncio.run(router.active_actor(object(), "firebase-uid", request))
+
+        self.assertEqual(result["id"], ACTOR)
+        self.assertEqual(request.state.audit_actor_user_id, ACTOR)
+
+    def test_denied_inactive_measurement_actor_is_still_auditable(self):
+        from types import SimpleNamespace
+
+        request = SimpleNamespace(state=SimpleNamespace())
+        actor = {"id": ACTOR, "status": "suspended"}
+
+        async def fetch(*args, **kwargs):
+            return actor
+
+        with patch.object(router, "fetch_one", fetch):
+            import asyncio
+            with self.assertRaises(router.MeasurementError):
+                asyncio.run(router.active_actor(object(), "firebase-uid", request))
+
+        self.assertEqual(request.state.audit_actor_user_id, ACTOR)
+
     def test_correction_browser_preflight(self):
         http = setup_client(self)
         origin = settings.cors_origins[0]
