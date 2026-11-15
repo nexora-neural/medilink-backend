@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class OrganizationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=200)
     type: str = Field(pattern="^(clinic|hospital|pharmacy|laboratory|other)$")
     registration_ref: str | None = Field(default=None, max_length=100)

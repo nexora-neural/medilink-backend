@@ -2,6 +2,12 @@ import logging
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
 from app.api.router import api_router
 from app.core.config import settings
 from app.core.rate_limits import (
@@ -12,16 +18,12 @@ from app.core.rate_limits import (
 )
 from app.database import models as _models  # noqa: F401 - register ORM metadata
 from app.database.session import check_database_connection, close_db, init_db
+from app.modules.audit.service import record_api_request
 from app.modules.documents.errors import (
     DocumentError,
     document_error_handler,
 )
 from app.modules.identity.auth import AuthenticationError
-from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,11 @@ async def assign_request_id(request: Request, call_next):
     response.headers["X-Request-ID"] = request_id
     if response.status_code >= 400:
         response.headers["Cache-Control"] = "no-store"
+    api_prefix = settings.api_v1_prefix.rstrip("/") + "/"
+    if request.url.path.startswith(api_prefix) and not request.url.path.endswith(
+        ("/health", "/health/database")
+    ):
+        await record_api_request(request, response)
     return response
 
 
