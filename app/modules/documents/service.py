@@ -346,19 +346,6 @@ async def upload_document(
                 "Invalid verification document context.",
             )
 
-        if not await _has_role(
-            db,
-            user,
-            "doctor",
-            "pharmacist",
-            "lab_staff",
-        ):
-            _reject(
-                403,
-                "ACCESS_DENIED",
-                "Professional role required.",
-            )
-
         profile = await db.scalar(
             select(ProfessionalProfile).where(
                 ProfessionalProfile.user_id == user.id

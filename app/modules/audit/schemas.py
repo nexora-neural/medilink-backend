@@ -14,6 +14,7 @@ SAFE_METADATA_KEYS = frozenset(
         "consultation_id",
         "created",
         "database_included",
+        "evidence_count",
         "files_included",
         "has_query",
         "is_sample",
@@ -27,6 +28,7 @@ SAFE_METADATA_KEYS = frozenset(
         "records_count",
         "restore_check_status",
         "result_count",
+        "reverification_required",
         "role",
         "route",
         "status",
@@ -36,7 +38,6 @@ SAFE_METADATA_KEYS = frozenset(
         "type",
     }
 )
-
 
 class AuditEventInput(BaseModel):
     """Safe, minimal data required to append one audit event."""
