@@ -118,6 +118,25 @@ class OrganizationPopulatedListRouteTests(IsolatedAsyncioTestCase):
             [{"id": str(organization.id), "name": "Central Clinic", "type": "clinic"}],
         )
 
+    async def test_revoked_super_admin_assignment_does_not_authorize_organization_admin(self):
+        actor_id = uuid4()
+
+        class RevokedRoleSession:
+            async def scalar(self, statement):
+                sql = str(statement.compile(compile_kwargs={"literal_binds": True}))
+                self_test.assertIn("user_roles.revoked_at IS NULL", sql)
+                return None
+
+        self_test = self
+        session = RevokedRoleSession()
+        actor = SimpleNamespace(id=actor_id, status="active")
+        request = SimpleNamespace(state=SimpleNamespace(request_id="req-revoked-admin"))
+
+        with self.assertRaises(organization_service.AuthenticationError) as raised:
+            await organization_service._require_super_admin(session, actor, request)
+
+        self.assertEqual(raised.exception.status_code, 403)
+
     async def test_organization_registration_rejects_unknown_fields_before_service_call(self):
         valid_fields = {"name": "Synthetic QA Clinic", "type": "clinic"}
         with patch(
@@ -131,6 +150,7 @@ class OrganizationPopulatedListRouteTests(IsolatedAsyncioTestCase):
                 self.assertEqual(response.status_code, 422, response.text)
 
         submit_organization.assert_not_awaited()
+
 
     async def test_admin_organization_detail_returns_the_requested_record(self):
         organization = SimpleNamespace(

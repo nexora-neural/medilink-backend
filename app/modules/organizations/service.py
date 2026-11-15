@@ -45,7 +45,11 @@ async def _has_role(session: AsyncSession, user_id: UUID, role: str) -> bool:
         await session.scalar(
             select(Role.id)
             .join(UserRole, UserRole.role_id == Role.id)
-            .where(UserRole.user_id == user_id, Role.code == role)
+            .where(
+                UserRole.user_id == user_id,
+                Role.code == role,
+                UserRole.revoked_at.is_(None),
+            )
         )
         is not None
     )
@@ -93,7 +97,7 @@ async def submit_organization(
         await session.scalars(
             select(Role.code)
             .join(UserRole, Role.id == UserRole.role_id)
-            .where(UserRole.user_id == user.id)
+            .where(UserRole.user_id == user.id, UserRole.revoked_at.is_(None))
         )
     ).all()
     profile = await session.get(ProfessionalProfile, user.id)
