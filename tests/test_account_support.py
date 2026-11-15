@@ -1,13 +1,14 @@
 """ML-35 request validation and PostgreSQL account-support integration tests."""
 
 import os
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, skipUnless
 from unittest.mock import patch
 from uuid import uuid4
 
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.database.session import get_session
@@ -16,6 +17,8 @@ from app.modules.audit.models import AuditEvent
 from app.modules.identity.auth import get_verified_identity
 from app.modules.identity.models import AccountSupportDecisionReason, Role, User, UserRole
 from app.modules.identity.request_limits import require_authenticated_rate_limit
+from app.modules.organizations.models import Organization
+from app.modules.profiles.models import ProfessionalProfile
 
 TEST_DATABASE_URL = os.getenv("ML35_TEST_DATABASE_URL")
 USERS = "/api/v1/admin/users"
@@ -45,7 +48,7 @@ class AccountSupportTests(IsolatedAsyncioTestCase):
         )
         self.addAsyncCleanup(self.session.close)
         self.roles = {}
-        for code in ("patient", "admin", "super_admin"):
+        for code in ("patient", "admin", "super_admin", "doctor"):
             role = await self.session.scalar(select(Role).where(Role.code == code))
             if role is None:
                 role = Role(code=code, label=code)
@@ -204,6 +207,72 @@ class AccountSupportTests(IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 201)
         assignment = await self.session.get(UserRole, (patient_id, self.roles["admin"]))
         self.assertIsNone(assignment.revoked_at)
+
+    async def test_revoked_super_admin_cannot_access_organization_admin_routes(self):
+        self.actor = self.super_admin
+        assignment = await self.session.get(
+            UserRole, (self.super_admin.id, self.roles["super_admin"])
+        )
+        assignment.revoked_at = datetime.now(UTC)
+        organization = Organization(
+            name="ML249 Synthetic Revoked-Role Clinic", type="clinic", status="active"
+        )
+        self.session.add(organization)
+        await self.session.flush()
+        organization_id = organization.id
+        await self.session.commit()
+
+        list_response = await self.client.get("/api/v1/admin/organizations")
+        decision_response = await self.client.post(
+            f"/api/v1/admin/organizations/{organization_id}/decision",
+            json={"status": "suspended", "reason": "ML249 synthetic QA repro"},
+        )
+
+        self.assertEqual(list_response.status_code, 403, list_response.text)
+        self.assertEqual(decision_response.status_code, 403, decision_response.text)
+        persisted = await self.session.get(Organization, organization_id)
+        self.assertEqual(persisted.status, "active")
+        decision_event = await self.session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.action == "organization.decision",
+                AuditEvent.target_id == organization_id,
+            )
+        )
+        self.assertIsNone(decision_event)
+
+        self.actor = await self.create_user("ML249 Active Super Admin Control", "super_admin")
+        active_response = await self.client.get("/api/v1/admin/organizations")
+        self.assertEqual(active_response.status_code, 200, active_response.text)
+
+    async def test_revoked_professional_role_cannot_submit_organization(self):
+        professional = await self.create_user("ML249 Revoked Doctor", "doctor")
+        self.session.add(
+            ProfessionalProfile(
+                user_id=professional.id,
+                role="doctor",
+                doctor_reference=f"ML249-{professional.id}",
+            )
+        )
+        assignment = await self.session.get(UserRole, (professional.id, self.roles["doctor"]))
+        assignment.revoked_at = datetime.now(UTC)
+        await self.session.commit()
+        self.actor = professional
+
+        response = await self.client.post(
+            "/api/v1/organizations",
+            json={"name": "ML249 Revoked Doctor Clinic", "type": "clinic"},
+        )
+
+        self.assertEqual(response.status_code, 403, response.text)
+        self.assertEqual(response.json()["code"], "ACCESS_DENIED")
+        created_count = await self.session.scalar(
+            select(func.count())
+            .select_from(Organization)
+            .where(Organization.name == "ML249 Revoked Doctor Clinic")
+        )
+        self.assertEqual(created_count, 0)
+        event = await self.event_for(response)
+        self.assertIsNone(event)
 
     async def test_cannot_suspend_final_active_super_admin(self):
         self.actor = self.super_admin

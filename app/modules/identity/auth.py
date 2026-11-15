@@ -58,7 +58,9 @@ async def get_verified_identity(
         ) from None
     except exceptions.FirebaseError:
         raise _error(
-            request, 503, "AUTHENTICATION_UNAVAILABLE",
+            request,
+            503,
+            "AUTHENTICATION_UNAVAILABLE",
             "Authentication is temporarily unavailable.",
         ) from None
     if not isinstance(claims.get("uid"), str) or not claims["uid"]:
@@ -74,6 +76,9 @@ async def get_current_user(
     user = await session.scalar(select(User).where(User.firebase_uid == identity["uid"]))
     if user is None:
         raise _error(request, 403, "ACCOUNT_INACTIVE", "The local account is not available.")
+    actor_id = getattr(user, "id", None)
+    if actor_id is not None:
+        request.state.audit_actor_user_id = actor_id
     if user.status in {"suspended", "disabled"}:
         raise _error(request, 403, "ACCOUNT_INACTIVE", "The local account is inactive.")
     return user

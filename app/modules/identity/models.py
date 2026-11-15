@@ -104,7 +104,7 @@ class UserRole(Base):
 
 
 class AccountSupportDecisionReason(Base):
-    """Private reason for an append-only account support audit event."""
+    """Private reason linked to an append-only administrative decision event."""
 
     __tablename__ = "account_support_decision_reasons"
 

@@ -1,6 +1,7 @@
 """Contract checks for the organization and membership API schemas."""
 
 import unittest
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
@@ -11,7 +12,10 @@ from pydantic import ValidationError
 
 from app.database.session import get_session
 from app.main import app
+from app.modules.audit.schemas import SAFE_METADATA_KEYS
 from app.modules.identity.auth import get_current_user
+from app.modules.identity.models import AccountSupportDecisionReason
+from app.modules.organizations import service as organization_service
 from app.modules.organizations.router import router
 from app.modules.organizations.schemas import (
     MembershipDecision,
@@ -22,6 +26,13 @@ from app.modules.organizations.schemas import (
 
 
 class OrganizationSchemaTests(unittest.TestCase):
+    def test_decision_reasons_use_separate_protected_storage_model(self):
+        self.assertEqual(
+            AccountSupportDecisionReason.__table__.c.audit_event_id.foreign_keys.pop().target_fullname,
+            "audit_events.id",
+        )
+        self.assertNotIn("reason", SAFE_METADATA_KEYS)
+
     def test_organization_input_trims_in_service_and_rejects_invalid_type(self):
         payload = OrganizationInput(name="  Clinic  ", type="clinic")
         self.assertEqual(payload.name, "Clinic")
@@ -30,9 +41,11 @@ class OrganizationSchemaTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             OrganizationInput(name="Clinic", type="unapproved")
 
-    def test_organization_registration_cannot_set_status(self):
-        payload = OrganizationInput(name="Clinic", type="clinic", status="active")
-        self.assertNotIn("status", payload.model_dump())
+    def test_organization_registration_rejects_unknown_fields_and_status(self):
+        base = {"name": "Clinic", "type": "clinic"}
+        for extra in ({"unknown_ml47": True}, {"status": "active"}):
+            with self.subTest(extra=extra), self.assertRaises(ValidationError):
+                OrganizationInput.model_validate({**base, **extra})
 
     def test_membership_and_decision_values_follow_contract(self):
         payload = MembershipInput(organization_id=uuid4(), role="lab_staff")
@@ -105,6 +118,40 @@ class OrganizationPopulatedListRouteTests(IsolatedAsyncioTestCase):
             [{"id": str(organization.id), "name": "Central Clinic", "type": "clinic"}],
         )
 
+    async def test_revoked_super_admin_assignment_does_not_authorize_organization_admin(self):
+        actor_id = uuid4()
+
+        class RevokedRoleSession:
+            async def scalar(self, statement):
+                sql = str(statement.compile(compile_kwargs={"literal_binds": True}))
+                self_test.assertIn("user_roles.revoked_at IS NULL", sql)
+                return None
+
+        self_test = self
+        session = RevokedRoleSession()
+        actor = SimpleNamespace(id=actor_id, status="active")
+        request = SimpleNamespace(state=SimpleNamespace(request_id="req-revoked-admin"))
+
+        with self.assertRaises(organization_service.AuthenticationError) as raised:
+            await organization_service._require_super_admin(session, actor, request)
+
+        self.assertEqual(raised.exception.status_code, 403)
+
+    async def test_organization_registration_rejects_unknown_fields_before_service_call(self):
+        valid_fields = {"name": "Synthetic QA Clinic", "type": "clinic"}
+        with patch(
+            "app.modules.organizations.service.submit_organization",
+            new=AsyncMock(),
+        ) as submit_organization:
+            for extra in ({"unknown_ml47": True}, {"status": "active"}):
+                response = await self.client.post(
+                    "/api/v1/organizations", json={**valid_fields, **extra}
+                )
+                self.assertEqual(response.status_code, 422, response.text)
+
+        submit_organization.assert_not_awaited()
+
+
     async def test_admin_organization_detail_returns_the_requested_record(self):
         organization = SimpleNamespace(
             id=uuid4(),
@@ -163,6 +210,116 @@ class OrganizationPopulatedListRouteTests(IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 404, response.text)
         self.assertEqual(response.json()["code"], "RESOURCE_NOT_FOUND")
         get_organization.assert_awaited_once()
+
+
+class OrganizationDecisionAuditTests(IsolatedAsyncioTestCase):
+    class DecisionSession:
+        def __init__(self):
+            self.added = []
+            self.committed = False
+
+        def add(self, value):
+            self.added.append(value)
+
+        async def flush(self):
+            return None
+
+        async def refresh(self, value):
+            return None
+
+        async def commit(self):
+            self.committed = True
+
+        async def rollback(self):
+            return None
+
+    async def test_organization_decision_status_and_reason_link_to_same_audit_event(self):
+        audit_event_id = uuid4()
+        organization = SimpleNamespace(
+            id=uuid4(),
+            name="Central Clinic",
+            type="clinic",
+            registration_ref=None,
+            status="pending",
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        session = self.DecisionSession()
+        request = SimpleNamespace(state=SimpleNamespace(request_id="req-organization-decision"))
+        actor = SimpleNamespace(id=uuid4(), status="active")
+        payload = OrganizationDecision(status="active", reason="Registration documents verified.")
+
+        with (
+            patch.object(organization_service, "_require_super_admin", new=AsyncMock()),
+            patch.object(
+                organization_service.repository,
+                "get_organization",
+                new=AsyncMock(return_value=organization),
+            ),
+            patch.object(
+                organization_service,
+                "append_event",
+                new=AsyncMock(return_value=SimpleNamespace(id=audit_event_id)),
+            ) as append_event,
+        ):
+            result = await organization_service.decide_organization(
+                session, actor, request, organization.id, payload
+            )
+
+        self.assertEqual(result.status, "active")
+        self.assertTrue(session.committed)
+        self.assertEqual(append_event.await_args.kwargs["metadata"], {"status": "active"})
+        self.assertNotIn("reason", append_event.await_args.kwargs["metadata"])
+        stored_reasons = [
+            item for item in session.added if isinstance(item, AccountSupportDecisionReason)
+        ]
+        self.assertEqual(len(stored_reasons), 1)
+        self.assertEqual(stored_reasons[0].audit_event_id, audit_event_id)
+        self.assertEqual(stored_reasons[0].reason, payload.reason)
+
+    async def test_membership_decision_status_and_reason_link_to_same_audit_event(self):
+        audit_event_id = uuid4()
+        membership = SimpleNamespace(
+            id=uuid4(),
+            organization_id=uuid4(),
+            user_id=uuid4(),
+            role="doctor",
+            status="pending",
+            verified_at=None,
+            created_at=datetime.now(UTC),
+        )
+        session = self.DecisionSession()
+        request = SimpleNamespace(state=SimpleNamespace(request_id="req-membership-decision"))
+        actor = SimpleNamespace(id=uuid4(), status="active")
+        payload = MembershipDecision(status="approved", reason="Professional details verified.")
+
+        with (
+            patch.object(organization_service, "_require_super_admin", new=AsyncMock()),
+            patch.object(
+                organization_service.repository,
+                "get_membership",
+                new=AsyncMock(return_value=membership),
+            ),
+            patch.object(
+                organization_service,
+                "append_event",
+                new=AsyncMock(return_value=SimpleNamespace(id=audit_event_id)),
+            ) as append_event,
+        ):
+            result = await organization_service.decide_membership(
+                session, actor, request, membership.id, payload
+            )
+
+        self.assertEqual(result.status, "approved")
+        self.assertTrue(session.committed)
+        self.assertEqual(append_event.await_args.kwargs["metadata"], {"status": "approved"})
+        self.assertNotIn("reason", append_event.await_args.kwargs["metadata"])
+        stored_reasons = [
+            item for item in session.added if isinstance(item, AccountSupportDecisionReason)
+        ]
+        self.assertEqual(len(stored_reasons), 1)
+        self.assertEqual(stored_reasons[0].audit_event_id, audit_event_id)
+        self.assertEqual(stored_reasons[0].reason, payload.reason)
 
 
 if __name__ == "__main__":

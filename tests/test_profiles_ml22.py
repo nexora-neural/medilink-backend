@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 from unittest import IsolatedAsyncioTestCase, TestCase
+from unittest.mock import AsyncMock, patch
 
 from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
@@ -52,10 +53,11 @@ class ProfileValidationTests(TestCase):
 
 class ProfileRouteTests(IsolatedAsyncioTestCase):
     async def test_missing_auth_is_safe_and_not_cached(self):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            response = await client.get("/api/v1/me")
+        with patch("app.main.record_api_request", new=AsyncMock()):
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.get("/api/v1/me")
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["code"], "AUTHENTICATION_REQUIRED")
         self.assertEqual(response.headers["cache-control"], "no-store")
