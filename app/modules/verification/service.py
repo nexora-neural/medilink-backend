@@ -1,17 +1,16 @@
 """Business rules and orchestration for professional verification."""
 
-
-
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import Request
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.audit.models import AuditEvent
 from app.modules.identity.auth import AuthenticationError
-from app.modules.identity.models import User
-from app.modules.organizations.models import Organization
+from app.modules.identity.models import Role, User, UserRole
+from app.modules.organizations.models import Organization, OrganizationMembership
 from app.modules.profiles.models import ProfessionalProfile
 from app.modules.verification import repository
 from app.modules.verification.models import (
@@ -22,17 +21,14 @@ from app.modules.verification.schemas import (
     ProfessionalProfileInput,
     ProfessionalProfileRead,
     VerificationApplicationInput,
-    VerificationApplicationList,
     VerificationApplicationRead,
+    VerificationApplicationsReadPage,
 )
 
+PROFESSIONAL_ROLES = ("doctor", "pharmacist", "lab_staff")
 
-def _error(
-    request: Request,
-    status: int,
-    code: str,
-    message: str,
-) -> AuthenticationError:
+
+def _error(request: Request, status: int, code: str, message: str) -> AuthenticationError:
     return AuthenticationError(
         status_code=status,
         detail={
@@ -45,13 +41,9 @@ def _error(
 
 
 def _check_account(user: User, request: Request) -> None:
-    # Applications are available to pending and active accounts.
-    # They do not require an approved professional role.
+    # Pending applicants can apply; they do NOT receive clinical permissions here.
     if user.status not in {"pending", "active"}:
-        raise _error(
-            request, 403, "ACCESS_DENIED",
-            "Account is not eligible for verification.",
-        )
+        raise _error(request, 403, "ACCESS_DENIED", "Account is not eligible for verification.")
 
 
 def _audit(
@@ -70,9 +62,50 @@ def _audit(
             target_type=target_type,
             target_id=target_id,
             outcome="success",
-            request_id=request.state.request_id,
+            request_id=getattr(request.state, "request_id", ""),
             metadata_=metadata,
         )
+    )
+
+
+async def _ensure_role_consistency(
+    db: AsyncSession,
+    user: User,
+    request: Request,
+    requested_role: str,
+) -> None:
+    # An applicant with no assigned professional role is allowed to apply.
+    # If roles already exist, they must agree with the requested profile role.
+    assigned = await repository.get_assigned_professional_roles(db, user.id)
+    if assigned and assigned != {requested_role}:
+        raise _error(
+            request,
+            409,
+            "INVALID_STATE",
+            "Assigned professional role does not match the requested role.",
+        )
+
+
+async def _revoke_professional_access(db: AsyncSession, user_id: UUID) -> None:
+    """Revoke derived professional access atomically before re-verification."""
+    now = datetime.now(UTC)
+    await db.execute(
+        update(UserRole)
+        .where(
+            UserRole.user_id == user_id,
+            UserRole.revoked_at.is_(None),
+            UserRole.role_id.in_(select(Role.id).where(Role.code.in_(PROFESSIONAL_ROLES))),
+        )
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(OrganizationMembership)
+        .where(
+            OrganizationMembership.user_id == user_id,
+            OrganizationMembership.role.in_(PROFESSIONAL_ROLES),
+            OrganizationMembership.status == "approved",
+        )
+        .values(status="pending", verified_at=None)
     )
 
 
@@ -83,63 +116,69 @@ async def update_professional_profile(
     payload: ProfessionalProfileInput,
 ) -> ProfessionalProfileRead:
     _check_account(user, request)
-
     try:
-        # Serialize concurrent profile updates for this account.
-        await db.scalar(
-            select(User.id)
-            .where(User.id == user.id)
-            .with_for_update()
+        # Lock the account so profile updates and submissions cannot race.
+        await db.scalar(select(User.id).where(User.id == user.id).with_for_update())
+        profile = await repository.get_professional_profile(db, user.id, lock=True)
+        existing = await repository.get_user_applications(db, user.id)
+        role_changed = profile is not None and profile.role != payload.role.value
+        registration_changed = (
+            profile is not None
+            and "registration_number" in payload.model_fields_set
+            and profile.registration_number != payload.registration_number
         )
-
-        profile = await repository.get_professional_profile(
-            db, user.id, lock=True
-        )
-
-        if profile is not None and profile.role != payload.role.value:
+        if role_changed and any(a.status in {"pending", "not_submitted"} for a in existing):
             raise _error(
-                request, 409, "INVALID_STATE",
-                "The professional role cannot be changed.",
+                request,
+                409,
+                "INVALID_STATE",
+                "A pending application must be resolved before changing roles.",
             )
 
-        if profile is not None and profile.verification_status == "approved":
-            raise _error(
-                request, 409, "INVALID_STATE",
-                "An approved professional profile cannot be edited here.",
-            )
+        # An approved role/registration change invalidates verified access.
+        reverify = (
+            profile is not None
+            and profile.verification_status == "approved"
+            and (role_changed or registration_changed)
+        )
+        if reverify:
+            await _revoke_professional_access(db, user.id)
+        else:
+            await _ensure_role_consistency(db, user, request, payload.role.value)
 
         created = profile is None
-
-        if profile is None:
+        if created:
             profile = ProfessionalProfile(
                 user_id=user.id,
                 role=payload.role.value,
-                doctor_reference=(
-                    uuid4().hex if payload.role.value == "doctor" else None
-                ),
+                doctor_reference=uuid4().hex if payload.role.value == "doctor" else None,
                 verification_status="not_submitted",
             )
             db.add(profile)
 
-        changed_fields = []
+        changed_fields: list[str] = []
+        if role_changed:
+            profile.role = payload.role.value
+            profile.doctor_reference = uuid4().hex if payload.role.value == "doctor" else None
+            changed_fields.append("role")
 
-        for field in (
-            "registration_number",
-            "qualifications",
-            "specialty",
-        ):
-            # PUT keeps the same role while updating supplied profile fields.
+        for field in ("registration_number", "qualifications", "specialty"):
             if field not in payload.model_fields_set:
                 continue
-
             value = getattr(payload, field)
             if getattr(profile, field) != value:
                 setattr(profile, field, value)
                 changed_fields.append(field)
 
+        if reverify:
+            profile.verification_status = "not_submitted"
+            changed_fields.append("verification_status")
+        elif role_changed and profile.verification_status != "not_submitted":
+            profile.verification_status = "not_submitted"
+            changed_fields.append("verification_status")
+
         await db.flush()
         await db.refresh(profile)
-
         if created or changed_fields:
             _audit(
                 db,
@@ -151,13 +190,12 @@ async def update_professional_profile(
                 {
                     "created": created,
                     "changed_fields": changed_fields,
+                    "reverification_required": reverify,
                 },
             )
-
         response = ProfessionalProfileRead.model_validate(profile)
         await db.commit()
         return response
-
     except Exception:
         await db.rollback()
         raise
@@ -170,85 +208,54 @@ async def submit_application(
     payload: VerificationApplicationInput,
 ) -> VerificationApplicationRead:
     _check_account(user, request)
-
     try:
-        # Lock the account to serialize submissions from this user.
-        await db.scalar(
-            select(User.id)
-            .where(User.id == user.id)
-            .with_for_update()
-        )
-
-        profile = await repository.get_professional_profile(
-            db, user.id, lock=True
-        )
-
+        await db.scalar(select(User.id).where(User.id == user.id).with_for_update())
+        profile = await repository.get_professional_profile(db, user.id, lock=True)
         if profile is None:
             raise _error(
-                request, 409, "INVALID_STATE",
-                "Create a professional profile before applying.",
+                request, 409, "INVALID_STATE", "Create a professional profile before applying."
             )
-
+        if profile.role != payload.role.value:
+            raise _error(
+                request,
+                409,
+                "INVALID_STATE",
+                "Application role must match the professional profile.",
+            )
+        await _ensure_role_consistency(db, user, request, payload.role.value)
         if profile.verification_status in {"approved", "suspended"}:
             raise _error(
-                request, 409, "INVALID_STATE",
+                request,
+                409,
+                "INVALID_STATE",
                 "The professional profile is not eligible for submission.",
             )
 
-        # Prevent duplicate live applications but retain older history.
-        existing = await repository.get_user_applications(
-            db, user.id
-        )
-
-        if any(
-            application.status in {"pending", "not_submitted"}
-            for application in existing
-        ):
+        existing = await repository.get_user_applications(db, user.id)
+        if any(a.status in {"pending", "not_submitted"} for a in existing):
             raise _error(
-                request, 409, "INVALID_STATE",
-                "A verification application is already pending.",
+                request, 409, "INVALID_STATE", "A verification application is already pending."
             )
-
         if payload.organization_id is not None:
-            organization = await db.get(
-                Organization, payload.organization_id
-            )
+            organization = await db.get(Organization, payload.organization_id)
             if organization is None:
-                raise _error(
-                    request, 404, "RESOURCE_NOT_FOUND",
-                    "Organization not found.",
-                )
+                raise _error(request, 404, "RESOURCE_NOT_FOUND", "Organization not found.")
 
-        # Verify evidence before inserting the application.
-        for document_id in payload.document_ids:
-            document = await repository.get_owned_evidence(
-                db, document_id, user.id
-            )
-
-            if document is None:
-                raise _error(
-                    request, 404, "RESOURCE_NOT_FOUND",
-                    "Verification evidence not found.",
-                )
-
-        registration_number = (
-            payload.registration_number
-            if "registration_number" in payload.model_fields_set
-            else profile.registration_number
-        )
+        for document_id in payload.evidence_document_ids:
+            evidence = await repository.get_owned_evidence(db, document_id, user.id)
+            if evidence is None:
+                raise _error(request, 404, "RESOURCE_NOT_FOUND", "Verification evidence not found.")
 
         application = VerificationApplication(
             user_id=user.id,
             organization_id=payload.organization_id,
-            role=profile.role,
-            registration_number=registration_number,
+            role=payload.role.value,
+            registration_number=payload.registration_number,
             status="pending",
         )
-
         db.add(application)
         await db.flush()
-
-        for document_id in payload.document_ids:
+        for document_id in payload.evidence_document_ids:
             db.add(
                 VerificationApplicationDocument(
                     application_id=application.id,
@@ -256,15 +263,7 @@ async def submit_application(
                     attached_by=user.id,
                 )
             )
-
-        # Submission does not create a role assignment or approval.
-        # Retain the current profile status until the review workflow
-        # performs a separate authorized status transition.
-        if profile.verification_status in {
-            "not_submitted",
-            "rejected",
-            "more_info_requested",
-        }:
+        if profile.verification_status in {"not_submitted", "rejected", "more_info_requested"}:
             profile.verification_status = "pending"
 
         _audit(
@@ -274,24 +273,15 @@ async def submit_application(
             "verification_application.submitted",
             "verification_application",
             application.id,
-            {
-                "role": profile.role,
-                "evidence_count": len(payload.document_ids),
-            },
+            {"role": payload.role.value, "evidence_count": len(payload.evidence_document_ids)},
         )
-
         await db.flush()
         await db.refresh(application)
-
-        response = VerificationApplicationRead.model_validate(
-            application
-        ).model_copy(
-            update={"document_ids": list(payload.document_ids)}
+        response = VerificationApplicationRead.model_validate(application).model_copy(
+            update={"document_ids": list(payload.evidence_document_ids)}
         )
-
         await db.commit()
         return response
-
     except Exception:
         await db.rollback()
         raise
@@ -301,26 +291,22 @@ async def list_own_applications(
     db: AsyncSession,
     user: User,
     request: Request,
-) -> VerificationApplicationList:
+    *,
+    page: int = 1,
+    page_size: int = 20,
+) -> VerificationApplicationsReadPage:
     _check_account(user, request)
-
-    applications = await repository.get_user_applications(
-        db, user.id
+    applications, total = await repository.get_user_applications_page(
+        db, user.id, page=page, page_size=page_size
     )
-
     items = []
-
     for application in applications:
-        document_ids = await repository.get_application_documents(
-            db, application.id
+        ids = await repository.get_application_documents(db, application.id)
+        items.append(
+            VerificationApplicationRead.model_validate(application).model_copy(
+                update={"document_ids": ids}
+            )
         )
-
-        response = VerificationApplicationRead.model_validate(
-            application
-        ).model_copy(
-            update={"document_ids": document_ids}
-        )
-
-        items.append(response)
-
-    return VerificationApplicationList(items=items)
+    return VerificationApplicationsReadPage(
+        items=items, page=page, page_size=page_size, total=total
+    )

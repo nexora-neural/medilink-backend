@@ -1,5 +1,4 @@
-
-"""Pydantic schemas for professional verification applications."""
+"""Request and response contracts for professional verification applications."""
 
 from datetime import datetime
 from uuid import UUID
@@ -10,24 +9,19 @@ from app.modules.identity.enums import ProfessionalRole
 
 
 class VerificationInput(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-        str_strip_whitespace=True,
-    )
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
 class ProfessionalProfileInput(VerificationInput):
     role: ProfessionalRole
-    registration_number: str | None = Field(default=None, max_length=150)
+    registration_number: str | None = Field(default=None, max_length=100)
     qualifications: str | None = Field(default=None, max_length=2000)
-    specialty: str | None = Field(default=None, max_length=200)
+    specialty: str | None = Field(default=None, max_length=150)
 
     @field_validator("registration_number", "qualifications", "specialty")
     @classmethod
     def normalize_text(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            return None
-        return value
+        return None if value is not None and not value.strip() else value
 
 
 class ProfessionalProfileRead(BaseModel):
@@ -45,21 +39,22 @@ class ProfessionalProfileRead(BaseModel):
 
 
 class VerificationApplicationInput(VerificationInput):
+    role: ProfessionalRole
     organization_id: UUID | None = None
-    registration_number: str | None = Field(default=None, max_length=150)
-    document_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    registration_number: str = Field(min_length=1, max_length=100)
+    evidence_document_ids: list[UUID] = Field(min_length=1, max_length=20)
 
     @field_validator("registration_number")
     @classmethod
-    def normalize_registration(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            return None
+    def nonblank_registration(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Registration number must not be blank.")
         return value
 
     @model_validator(mode="after")
-    def validate_documents(self):
-        if len(set(self.document_ids)) != len(self.document_ids):
-            raise ValueError("Duplicate document IDs are not allowed.")
+    def unique_evidence(self):
+        if len(set(self.evidence_document_ids)) != len(self.evidence_document_ids):
+            raise ValueError("Duplicate evidence document IDs are not allowed.")
         return self
 
 
@@ -78,6 +73,12 @@ class VerificationApplicationRead(BaseModel):
     document_ids: list[UUID] = Field(default_factory=list)
 
 
-class VerificationApplicationList(BaseModel):
+class VerificationApplicationsReadPage(BaseModel):
     items: list[VerificationApplicationRead]
+    page: int
+    page_size: int
+    total: int
 
+
+# Retain import compatibility for code that used the old name.
+VerificationApplicationList = VerificationApplicationsReadPage

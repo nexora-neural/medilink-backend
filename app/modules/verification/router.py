@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.session import get_session
@@ -15,8 +15,8 @@ from app.modules.verification.schemas import (
     ProfessionalProfileInput,
     ProfessionalProfileRead,
     VerificationApplicationInput,
-    VerificationApplicationList,
     VerificationApplicationRead,
+    VerificationApplicationsReadPage,
 )
 
 router = APIRouter(
@@ -24,25 +24,15 @@ router = APIRouter(
     route_class=ProfileRoute,
     dependencies=[Depends(require_authenticated_rate_limit)],
 )
-
 DB = Annotated[AsyncSession, Depends(get_session)]
 Actor = Annotated[User, Depends(get_current_user)]
 
 
-@router.put(
-    "/me/professional-profile",
-    response_model=ProfessionalProfileRead,
-)
+@router.put("/me/professional-profile", response_model=ProfessionalProfileRead)
 async def put_professional_profile(
-    payload: ProfessionalProfileInput,
-    request: Request,
-    db: DB,
-    actor: Actor,
+    payload: ProfessionalProfileInput, request: Request, db: DB, actor: Actor
 ) -> ProfessionalProfileRead:
-    """Create or update the applicant's professional profile."""
-    return await service.update_professional_profile(
-        db, actor, request, payload
-    )
+    return await service.update_professional_profile(db, actor, request, payload)
 
 
 @router.post(
@@ -51,27 +41,17 @@ async def put_professional_profile(
     status_code=status.HTTP_201_CREATED,
 )
 async def post_verification_application(
-    payload: VerificationApplicationInput,
-    request: Request,
-    db: DB,
-    actor: Actor,
+    payload: VerificationApplicationInput, request: Request, db: DB, actor: Actor
 ) -> VerificationApplicationRead:
-    """Submit a professional verification application."""
-    return await service.submit_application(
-        db, actor, request, payload
-    )
+    return await service.submit_application(db, actor, request, payload)
 
 
-@router.get(
-    "/me/verification-applications",
-    response_model=VerificationApplicationList,
-)
+@router.get("/me/verification-applications", response_model=VerificationApplicationsReadPage)
 async def get_my_verification_applications(
     request: Request,
     db: DB,
     actor: Actor,
-) -> VerificationApplicationList:
-    """List the authenticated applicant's verification applications."""
-    return await service.list_own_applications(
-        db, actor, request
-    )
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> VerificationApplicationsReadPage:
+    return await service.list_own_applications(db, actor, request, page=page, page_size=page_size)
