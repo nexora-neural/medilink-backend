@@ -308,3 +308,74 @@ class MeasurementsReviewTests(TestCase):
         assert response.json()["page_size"] == 10
         for params in ({"from": TIME}, {"page_size": 101}, {"unknown": "1"}):
             assert http.get(ROOT, headers=AUTH, params=params).status_code == 422
+
+
+class MeasurementHistoryEndpointTests(TestCase):
+    """Execute the HTTP route with controlled query results (no PostgreSQL)."""
+
+    def test_history_serialization_pagination_and_empty_results(self):
+        from decimal import Decimal
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from app.modules.measurements.models import Measurement
+
+        client = setup_client(self)
+        setup_permissions(self)
+        session = app.dependency_overrides[router.get_session]()
+        row = Measurement(
+            id=READING, patient_user_id=PATIENT, type="weight", value=Decimal("140.5"),
+            secondary_value=None, unit="lb", measured_at=datetime(2025, 1, 1, tzinfo=UTC),
+            recorded_by=PATIENT, source="patient", notes=None, status="superseded",
+            supersedes_id=None, correction_reason=None, created_at=datetime(2025, 1, 2, tzinfo=UTC),
+        )
+        session.scalar = AsyncMock(return_value=2)
+        session.execute = AsyncMock(return_value=SimpleNamespace(
+            scalars=lambda: SimpleNamespace(all=lambda: [row])
+        ))
+        response = client.get(ROOT + "/history?page=2&page_size=1", headers=AUTH)
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertEqual((result["page"], result["page_size"], result["total"]), (2, 1, 2))
+        self.assertEqual(result["items"][0]["value"], 140.5)
+        self.assertEqual(result["items"][0]["unit"], "lb")
+        self.assertEqual(result["items"][0]["status"], "superseded")
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        statement = session.execute.await_args.args[0]
+        sql = str(statement.compile(compile_kwargs={"literal_binds": True}))
+        self.assertIn(PATIENT, statement.compile().params.values())
+        self.assertIn("measurements.created_at DESC, measurements.id DESC", sql)
+        self.assertIn("LIMIT 1 OFFSET 1", sql)
+        session.scalar.return_value = 0
+        session.execute.return_value = SimpleNamespace(
+            scalars=lambda: SimpleNamespace(all=lambda: [])
+        )
+        response = client.get(ROOT + "/history", headers=AUTH)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {"items": [], "page": 1, "page_size": 20, "total": 0})
+
+    def test_history_denies_cross_patient_and_doctor_without_grant(self):
+        from unittest.mock import AsyncMock
+
+        client = setup_client(self)
+        state = setup_permissions(self)
+        session = app.dependency_overrides[router.get_session]()
+        session.scalar = AsyncMock()
+        session.execute = AsyncMock()
+        response = client.get(f"/api/v1/patients/{uuid4()}/measurements/history", headers=AUTH)
+        self.assertEqual(response.status_code, 404, response.text)
+        state.update(doctor=True, grant=False)
+        response = client.get(ROOT + "/history", headers=AUTH)
+        self.assertEqual(response.status_code, 404, response.text)
+        session.scalar.assert_not_awaited()
+        session.execute.assert_not_awaited()
+
+    def test_history_requires_auth_and_valid_pagination(self):
+        client = setup_client(self)
+        setup_permissions(self)
+        response = client.get(ROOT + "/history")
+        self.assertEqual(response.status_code, 401, response.text)
+        for query in ("page=0", "page_size=0", "page_size=101"):
+            with self.subTest(query=query):
+                response = client.get(ROOT + "/history?" + query, headers=AUTH)
+                self.assertEqual(response.status_code, 422, response.text)
