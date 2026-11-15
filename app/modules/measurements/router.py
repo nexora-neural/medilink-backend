@@ -7,10 +7,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.session import get_session
 from app.modules.identity.auth import AuthenticationError, get_verified_identity
+from .models import Measurement
 
 from .repository import fetch_one, list_active
 from .schemas import (
@@ -78,7 +80,8 @@ class MeasurementRoute(APIRoute):
 
 
 router = APIRouter(
-    tags=["Measurements"], route_class=MeasurementRoute,
+    tags=["Measurements"],
+    route_class=MeasurementRoute,
     responses={code: {"model": Error} for code in (400, 401, 403, 404, 409, 422, 429, 500)},
 )
 Database = Annotated[AsyncSession, Depends(get_session)]
@@ -185,4 +188,56 @@ async def post_correction(
         return await correct_measurement(
             db, actor, measurement_id, body, key, request.state.measurement_request_id,
             await request.json(),
+        )
+
+@router.get(
+    "/patients/{patient_id}/measurements/history",
+    response_model=MeasurementsReadPage,
+    operation_id="listPatientMeasurementHistory",
+)
+async def list_measurement_history(
+    patient_id: UUID,
+    request: Request,
+    db: Database,
+    uid: FirebaseUID,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+):
+    async with db.begin():
+        actor = await active_actor(db, uid, request)
+
+        await measurement_access(db, actor, patient_id)
+
+        total = (
+            await db.scalar(
+                select(func.count())
+                .select_from(Measurement)
+                .where(Measurement.patient_user_id == patient_id)
+            )
+        ) or 0
+
+        result = await db.execute(
+            select(Measurement)
+            .where(Measurement.patient_user_id == patient_id)
+            .order_by(
+                Measurement.created_at.desc(),
+                Measurement.id.desc(),
+            )
+            .offset(min((page - 1) * page_size, 2**63 - 1))
+            .limit(page_size)
+        )
+
+        rows = result.scalars().all()
+
+        return MeasurementsReadPage(
+            items=[
+                MeasurementsRead.model_validate(
+                    row,
+                    from_attributes=True,
+                )
+                for row in rows
+            ],
+            page=page,
+            page_size=page_size,
+            total=total,
         )
