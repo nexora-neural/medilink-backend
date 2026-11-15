@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from datetime import UTC, datetime, timedelta
 from unittest import IsolatedAsyncioTestCase, skipUnless
 from unittest.mock import patch
 from uuid import uuid4
@@ -119,3 +120,57 @@ class OrganizationMembershipConcurrencyTests(IsolatedAsyncioTestCase):
                 )
             )
         self.assertEqual(count, 1)
+
+    async def test_public_organization_list_uses_creation_order_and_stable_pagination(self):
+        prefix = f"ML252 ordering {uuid4()}"
+        now = datetime.now(UTC)
+        tie_low_id, tie_high_id = sorted((uuid4(), uuid4()))
+        older = Organization(
+            name=f"{prefix} A older",
+            type="clinic",
+            status="active",
+            created_at=now - timedelta(days=2),
+        )
+        tie_low = Organization(
+            id=tie_low_id,
+            name=f"{prefix} M tie low",
+            type="clinic",
+            status="active",
+            created_at=now - timedelta(days=1),
+        )
+        tie_high = Organization(
+            id=tie_high_id,
+            name=f"{prefix} M tie high",
+            type="clinic",
+            status="active",
+            created_at=now - timedelta(days=1),
+        )
+        newer = Organization(
+            name=f"{prefix} Z newer",
+            type="clinic",
+            status="active",
+            created_at=now,
+        )
+        async with self.sessions() as session:
+            session.add_all([older, tie_low, tie_high, newer])
+            await session.commit()
+
+        first_page = await self.client.get(
+            "/api/v1/organizations", params={"q": prefix, "page": 1, "page_size": 2}
+        )
+        second_page = await self.client.get(
+            "/api/v1/organizations", params={"q": prefix, "page": 2, "page_size": 2}
+        )
+
+        self.assertEqual(first_page.status_code, 200, first_page.text)
+        self.assertEqual(second_page.status_code, 200, second_page.text)
+        self.assertEqual(first_page.json()["total"], 4)
+        self.assertEqual(second_page.json()["total"], 4)
+        actual_ids = [
+            item["id"]
+            for response in (first_page, second_page)
+            for item in response.json()["items"]
+        ]
+        expected_ids = [str(newer.id), str(tie_high.id), str(tie_low.id), str(older.id)]
+        self.assertEqual(actual_ids, expected_ids)
+        self.assertEqual(len(actual_ids), len(set(actual_ids)))
