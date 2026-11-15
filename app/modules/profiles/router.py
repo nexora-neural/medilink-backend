@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.session import get_session
-from app.modules.audit.models import AuditEvent
+from app.modules.audit.service import append_event
 from app.modules.identity.auth import get_current_user, get_verified_identity
 from app.modules.identity.authorization import require_role
 from app.modules.identity.models import User
@@ -50,16 +50,15 @@ async def onboard(
     """Reconcile a verified identity and its requested local profile."""
     try:
         user, created, response = await onboard_identity(session, identity, data)
-        session.add(
-            AuditEvent(
-                actor_user_id=user.id,
-                action="account.onboarded",
-                target_type="user",
-                target_id=user.id,
-                outcome="success",
-                request_id=request.state.request_id,
-                metadata_={"created": created},
-            )
+        await append_event(
+            session,
+            actor_user_id=user.id,
+            action="account.onboarded",
+            target_type="user",
+            target_id=user.id,
+            outcome="success",
+            request_id=request.state.request_id,
+            metadata={"created": created},
         )
         await session.commit()
         return response
@@ -78,36 +77,32 @@ def get_account_audit_writer(request: Request) -> AccountAuditWriter:
     """Write only field names and keep audit in the caller's transaction."""
 
     async def write(session: AsyncSession, user_id: UUID, fields: list[str]) -> None:
-        session.add(
-            AuditEvent(
-                actor_user_id=user_id,
-                action="account.updated",
-                target_type="user",
-                target_id=user_id,
-                outcome="success",
-                request_id=request.state.request_id,
-                metadata_={"changed_fields": fields},
-            )
+        await append_event(
+            session,
+            actor_user_id=user_id,
+            action="account.updated",
+            target_type="user",
+            target_id=user_id,
+            outcome="success",
+            request_id=request.state.request_id,
+            metadata={"changed_fields": fields},
         )
-        await session.flush()
 
     return write
 
 
 def get_patient_profile_audit_writer(request: Request) -> AccountAuditWriter:
     async def write(session: AsyncSession, user_id: UUID, fields: list[str]) -> None:
-        session.add(
-            AuditEvent(
-                actor_user_id=user_id,
-                action="patient_profile.updated",
-                target_type="patient_profile",
-                target_id=user_id,
-                outcome="success",
-                request_id=request.state.request_id,
-                metadata_={"changed_fields": fields},
-            )
+        await append_event(
+            session,
+            actor_user_id=user_id,
+            action="patient_profile.updated",
+            target_type="patient_profile",
+            target_id=user_id,
+            outcome="success",
+            request_id=request.state.request_id,
+            metadata={"changed_fields": fields},
         )
-        await session.flush()
 
     return write
 

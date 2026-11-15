@@ -1,4 +1,3 @@
-
 """ML-36: private document upload and permission-checked retrieval."""
 
 from __future__ import annotations
@@ -8,8 +7,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from app.modules.audit.models import AuditEvent
+from fastapi import HTTPException, UploadFile
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.modules.audit.service import append_event
 from app.modules.consent.models import AccessGrant, GrantCategory
+from app.modules.documents import repository, storage
 from app.modules.documents.enum import DocumentStatus, RecordSource
 from app.modules.documents.errors import DocumentError
 from app.modules.documents.models import Document
@@ -26,11 +30,6 @@ from app.modules.laboratory.models import (
 )
 from app.modules.profiles.models import PatientProfile, ProfessionalProfile
 from app.modules.verification.models import VerificationApplicationDocument
-from fastapi import HTTPException, UploadFile
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.modules.documents import repository, storage
 
 logger = logging.getLogger(__name__)
 
@@ -68,23 +67,21 @@ async def _has_role(
     )
 
 
-def _audit(
+async def _audit(
     db: AsyncSession,
     user: User,
     action: str,
     doc_id: UUID,
     request_id: str,
 ) -> None:
-    db.add(
-        AuditEvent(
-            actor_user_id=user.id,
-            action=action,
-            target_type="document",
-            target_id=doc_id,
-            outcome="success",
-            request_id=request_id,
-            metadata_={},
-        )
+    await append_event(
+        db,
+        actor_user_id=user.id,
+        action=action,
+        target_type="document",
+        target_id=doc_id,
+        outcome="success",
+        request_id=request_id,
     )
 
 
@@ -178,6 +175,7 @@ async def _lab_allowed(
         original_report.laboratory_id,
     )
 
+
 async def _persist_lab_report(
     db: AsyncSession,
     user: User,
@@ -206,7 +204,6 @@ async def _persist_lab_report(
                 "INVALID_STATE",
                 "Upload request is no longer active.",
             )
-
 
         identity = ReportIdentity(
             id=uuid4(),
@@ -311,7 +308,6 @@ async def upload_document(
     correction_reason: str | None = None,
 ) -> Document:
 
-
     if document_type not in ALLOWED_TYPES:
         _reject(
             422,
@@ -338,7 +334,6 @@ async def upload_document(
             "ACCESS_DENIED",
             "Account is not eligible.",
         )
-
 
     if patient_id is None:
         if (
@@ -582,7 +577,7 @@ async def upload_document(
                 )
             )
 
-        _audit(
+        await _audit(
             db,
             user,
             "document.upload",
@@ -772,7 +767,7 @@ async def permitted_document(
         # Avoid revealing document existence.
         _reject()
 
-    _audit(
+    await _audit(
         db,
         user,
         "document.download" if content else "document.metadata_read",
