@@ -68,9 +68,10 @@ class VerificationApplicationRead(BaseModel):
     registration_number: str | None
     status: str
     submitted_at: datetime
+    reviewed_by: UUID | None
     reviewed_at: datetime | None
     review_reason: str | None
-    document_ids: list[UUID] = Field(default_factory=list)
+    evidence_document_ids: list[UUID] = Field(default_factory=list)
 
 
 class VerificationApplicationsReadPage(BaseModel):
