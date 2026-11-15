@@ -7,13 +7,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.session import get_session
 from app.modules.identity.auth import AuthenticationError, get_verified_identity
-from .models import Measurement
 
+from .models import Measurement
 from .repository import fetch_one, list_active
 from .schemas import (
     MeasurementCorrectionInput,
@@ -100,15 +100,18 @@ async def active_actor(db, uid, request: Request):
             EXISTS (
                 SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
                 WHERE ur.user_id = u.id AND r.code = 'patient'
+                  AND ur.revoked_at IS NULL
             ) AS is_patient,
             EXISTS (
                 SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
                 WHERE ur.user_id = u.id AND r.code = 'doctor'
+                  AND ur.revoked_at IS NULL
             ) AS is_doctor,
             EXISTS (
                 SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
                 JOIN professional_profiles p ON p.user_id = ur.user_id
                 WHERE ur.user_id = u.id AND r.code = 'doctor'
+                  AND ur.revoked_at IS NULL
                   AND p.role = 'doctor' AND p.verification_status = 'approved'
             ) AS is_verified_doctor
         FROM users u WHERE u.firebase_uid = :uid
@@ -119,6 +122,7 @@ async def active_actor(db, uid, request: Request):
     if actor is None or actor["status"] != "active":
         raise MeasurementError(403, "FORBIDDEN", "An active MediLink account is required.")
     return actor
+
 
 
 class MeasurementFilters(BaseModel):
