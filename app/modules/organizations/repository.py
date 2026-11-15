@@ -28,7 +28,7 @@ async def list_organizations(
     total = await session.scalar(select(func.count()).select_from(statement.subquery())) or 0
     rows = (
         await session.scalars(
-            statement.order_by(Organization.name, Organization.id)
+            statement.order_by(Organization.created_at.desc(), Organization.id.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
