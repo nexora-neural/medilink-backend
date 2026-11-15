@@ -280,7 +280,7 @@ async def submit_application(
         await db.flush()
         await db.refresh(application)
         response = VerificationApplicationRead.model_validate(application).model_copy(
-            update={"document_ids": list(payload.evidence_document_ids)}
+            update={"evidence_document_ids": list(payload.evidence_document_ids)}
         )
         await db.commit()
         return response
@@ -306,7 +306,7 @@ async def list_own_applications(
         ids = await repository.get_application_documents(db, application.id)
         items.append(
             VerificationApplicationRead.model_validate(application).model_copy(
-                update={"document_ids": ids}
+                update={"evidence_document_ids": ids}
             )
         )
     return VerificationApplicationsReadPage(
