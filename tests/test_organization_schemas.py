@@ -22,6 +22,7 @@ from app.modules.organizations.schemas import (
     MembershipInput,
     OrganizationDecision,
     OrganizationInput,
+    OrganizationPublicPage,
 )
 
 
@@ -117,6 +118,52 @@ class OrganizationPopulatedListRouteTests(IsolatedAsyncioTestCase):
             response.json()["items"],
             [{"id": str(organization.id), "name": "Central Clinic", "type": "clinic"}],
         )
+
+    async def test_public_organization_list_rejects_unknown_query_parameters_safely(self):
+        with patch(
+            "app.modules.organizations.router.service.list_public_organizations",
+            new=AsyncMock(),
+        ) as list_organizations:
+            response = await self.client.get(
+                "/api/v1/organizations", params={"unknown_ml47": "sensitive-value"}
+            )
+
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(response.json()["code"], "VALIDATION_ERROR")
+        self.assertEqual(response.json()["message"], "Invalid request input.")
+        self.assertEqual(response.json()["field_errors"], {"request": ["Invalid value."]})
+        self.assertNotIn("unknown_ml47", response.text)
+        self.assertNotIn("sensitive-value", response.text)
+        list_organizations.assert_not_awaited()
+
+    async def test_public_organization_list_keeps_supported_filters_and_bounds(self):
+        page = OrganizationPublicPage(items=[], page=2, page_size=3, total=0)
+        with patch(
+            "app.modules.organizations.router.service.list_public_organizations",
+            new=AsyncMock(return_value=page),
+        ) as list_organizations:
+            response = await self.client.get(
+                "/api/v1/organizations",
+                params={"type": "clinic", "q": "Central", "page": 2, "page_size": 3},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            list_organizations.await_args.args[3:], ("clinic", "Central", 2, 3)
+        )
+
+        for params in (
+            {"type": "unsupported"},
+            {"q": ""},
+            {"q": "x" * 201},
+            {"page": 0},
+            {"page_size": 101},
+        ):
+            with self.subTest(params=params):
+                response = await self.client.get("/api/v1/organizations", params=params)
+                self.assertEqual(response.status_code, 422, response.text)
+
+        list_organizations.assert_awaited_once()
 
     async def test_revoked_super_admin_assignment_does_not_authorize_organization_admin(self):
         actor_id = uuid4()

@@ -4,6 +4,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi.exceptions import RequestValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.session import get_session
@@ -27,6 +28,23 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 Actor = Annotated[User, Depends(get_current_user)]
 
 
+def _reject_unknown_organization_query_params(request: Request) -> None:
+    allowed = {"type", "q", "page", "page_size"}
+    unknown = sorted(set(request.query_params.keys()) - allowed)
+    if unknown:
+        raise RequestValidationError(
+            [
+                {
+                    "type": "extra_forbidden",
+                    "loc": ("query", name),
+                    "msg": "Extra inputs are not permitted",
+                    "input": None,
+                }
+                for name in unknown
+            ]
+        )
+
+
 @router.get("/organizations", response_model=OrganizationPublicPage)
 async def get_organizations(
     request: Request,
@@ -39,6 +57,7 @@ async def get_organizations(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
+    _reject_unknown_organization_query_params(request)
     return await service.list_public_organizations(db, actor, request, type, q, page, page_size)
 
 
