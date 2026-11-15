@@ -7,7 +7,7 @@ from fastapi import Request
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.audit.models import AuditEvent
+from app.modules.audit.service import append_event
 from app.modules.identity.auth import AuthenticationError
 from app.modules.identity.models import Role, User, UserRole
 from app.modules.organizations.models import Organization, OrganizationMembership
@@ -46,7 +46,7 @@ def _check_account(user: User, request: Request) -> None:
         raise _error(request, 403, "ACCESS_DENIED", "Account is not eligible for verification.")
 
 
-def _audit(
+async def _audit(
     db: AsyncSession,
     request: Request,
     user_id: UUID,
@@ -55,16 +55,15 @@ def _audit(
     target_id: UUID,
     metadata: dict,
 ) -> None:
-    db.add(
-        AuditEvent(
-            actor_user_id=user_id,
-            action=action,
-            target_type=target_type,
-            target_id=target_id,
-            outcome="success",
-            request_id=getattr(request.state, "request_id", ""),
-            metadata_=metadata,
-        )
+    await append_event(
+        db,
+        actor_user_id=user_id,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        outcome="success",
+        request_id=getattr(request.state, "request_id", ""),
+        metadata=metadata,
     )
 
 
@@ -180,7 +179,7 @@ async def update_professional_profile(
         await db.flush()
         await db.refresh(profile)
         if created or changed_fields:
-            _audit(
+            await _audit(
                 db,
                 request,
                 user.id,
@@ -263,10 +262,13 @@ async def submit_application(
                     attached_by=user.id,
                 )
             )
-        if profile.verification_status in {"not_submitted", "rejected", "more_info_requested"}:
+        if profile.verification_status in {"not_submitted",
+                                           "rejected",
+                                           "more_info_requested"
+                                           }:
             profile.verification_status = "pending"
 
-        _audit(
+        await _audit(
             db,
             request,
             user.id,
