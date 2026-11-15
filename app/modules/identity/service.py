@@ -3,6 +3,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
@@ -10,7 +11,7 @@ from fastapi import Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.audit.models import AuditEvent
+from app.modules.audit.service import append_event
 from app.modules.identity.auth import AuthenticationError
 from app.modules.identity.enums import AccountStatus
 from app.modules.identity.models import AccountSupportDecisionReason, Role, User, UserRole
@@ -37,22 +38,25 @@ async def audited_action(
     target_id: UUID | None = None,
     *,
     reason: str | None = None,
-) -> AsyncIterator[AuditEvent]:
+) -> AsyncIterator[Any]:
     """Keep a decision and its audit atomic, and record safe rejection metadata."""
-    event = AuditEvent(
-        actor_user_id=actor_id,
-        action=action,
-        target_type="users",
-        target_id=target_id,
-        outcome="success",
-        request_id=request.state.request_id,
-    )
+    event = SimpleNamespace(outcome="success", metadata_={})
     try:
         yield event
-        session.add(event)
+        persisted_event = await append_event(
+            session,
+            actor_user_id=actor_id,
+            action=action,
+            target_type="users",
+            target_id=target_id,
+            outcome=event.outcome,
+            request_id=request.state.request_id,
+            metadata=event.metadata_,
+        )
         if reason is not None:
-            await session.flush()
-            session.add(AccountSupportDecisionReason(audit_event_id=event.id, reason=reason))
+            session.add(
+                AccountSupportDecisionReason(audit_event_id=persisted_event.id, reason=reason)
+            )
         await session.commit()
     except SupportDecisionError as error:
         await session.rollback()
@@ -62,9 +66,16 @@ async def audited_action(
             409: "INVALID_STATE",
             503: "SERVICE_UNAVAILABLE",
         }[error.status]
-        event.outcome = "denied" if error.status == 403 else "failed"
-        event.metadata_ = {"code": code}
-        session.add(event)
+        await append_event(
+            session,
+            actor_user_id=actor_id,
+            action=action,
+            target_type="users",
+            target_id=target_id,
+            outcome="denied" if error.status == 403 else "failed",
+            request_id=request.state.request_id,
+            metadata={"code": code},
+        )
         await session.commit()
         raise AuthenticationError(
             status_code=error.status,

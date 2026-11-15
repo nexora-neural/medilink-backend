@@ -11,7 +11,7 @@ from fastapi import HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.audit.models import AuditEvent
+from app.modules.audit.service import append_event
 from app.modules.consent.models import AccessGrant, GrantCategory
 from app.modules.documents import repository, storage
 from app.modules.documents.enum import DocumentStatus, RecordSource
@@ -67,23 +67,21 @@ async def _has_role(
     )
 
 
-def _audit(
+async def _audit(
     db: AsyncSession,
     user: User,
     action: str,
     doc_id: UUID,
     request_id: str,
 ) -> None:
-    db.add(
-        AuditEvent(
-            actor_user_id=user.id,
-            action=action,
-            target_type="document",
-            target_id=doc_id,
-            outcome="success",
-            request_id=request_id,
-            metadata_={},
-        )
+    await append_event(
+        db,
+        actor_user_id=user.id,
+        action=action,
+        target_type="document",
+        target_id=doc_id,
+        outcome="success",
+        request_id=request_id,
     )
 
 
@@ -154,7 +152,9 @@ async def _lab_allowed(
         )
 
     original_report = await db.scalar(
-        select(Report).where(Report.document_id == supersedes_id).with_for_update()
+        select(Report)
+        .where(Report.document_id == supersedes_id)
+        .with_for_update()
     )
 
     if (
@@ -254,7 +254,9 @@ async def _persist_lab_report(
 
     # Lock the previous report while checking and updating its state.
     previous_report = await db.scalar(
-        select(Report).where(Report.document_id == supersedes_id).with_for_update()
+        select(Report)
+        .where(Report.document_id == supersedes_id)
+        .with_for_update()
     )
 
     if (
@@ -334,7 +336,10 @@ async def upload_document(
         )
 
     if patient_id is None:
-        if document_type != "verification_evidence" or upload_request_id is not None:
+        if (
+            document_type != "verification_evidence"
+            or upload_request_id is not None
+        ):
             _reject(
                 422,
                 "VALIDATION_ERROR",
@@ -342,14 +347,19 @@ async def upload_document(
             )
 
         profile = await db.scalar(
-            select(ProfessionalProfile).where(ProfessionalProfile.user_id == user.id)
+            select(ProfessionalProfile).where(
+                ProfessionalProfile.user_id == user.id
+            )
         )
 
-        if profile is None or profile.role not in {
-            "doctor",
-            "pharmacist",
-            "lab_staff",
-        }:
+        if (
+            profile is None
+            or profile.role not in {
+                "doctor",
+                "pharmacist",
+                "lab_staff",
+            }
+        ):
             _reject(
                 403,
                 "ACCESS_DENIED",
@@ -359,7 +369,10 @@ async def upload_document(
         source = RecordSource(profile.role)
 
     else:
-        if document_type == "verification_evidence" or verification_application_id is not None:
+        if (
+            document_type == "verification_evidence"
+            or verification_application_id is not None
+        ):
             _reject(
                 422,
                 "VALIDATION_ERROR",
@@ -367,14 +380,19 @@ async def upload_document(
             )
 
         patient_exists = await db.scalar(
-            select(PatientProfile.user_id).where(PatientProfile.user_id == patient_id)
+            select(PatientProfile.user_id).where(
+                PatientProfile.user_id == patient_id
+            )
         )
 
         if not patient_exists:
             _reject()
 
         if user.id == patient_id:
-            if user.status != "active" or not await _has_role(db, user, "patient"):
+            if (
+                user.status != "active"
+                or not await _has_role(db, user, "patient")
+            ):
                 _reject(
                     403,
                     "ACCESS_DENIED",
@@ -481,7 +499,9 @@ async def upload_document(
             )
 
         replacement_exists = await db.scalar(
-            select(Document.id).where(Document.supersedes_id == previous.id).limit(1)
+            select(Document.id)
+            .where(Document.supersedes_id == previous.id)
+            .limit(1)
         )
 
         # Corrected 409 API contract error code
@@ -504,7 +524,9 @@ async def upload_document(
             uploaded_by=user.id,
             source=source,
             document_type=document_type,
-            original_filename=Path(upload.filename or "document").name[:255],
+            original_filename=Path(
+                upload.filename or "document"
+            ).name[:255],
             storage_key=key,
             media_type=media_type,
             byte_size=byte_size,
@@ -515,7 +537,11 @@ async def upload_document(
 
         db.add(doc)
 
-        if patient_id is not None and user.id != patient_id and document_type == "report":
+        if (
+                patient_id is not None
+                and user.id != patient_id
+                and document_type == "report"
+        ):
             await _persist_lab_report(
                 db,
                 user,
@@ -538,7 +564,7 @@ async def upload_document(
                 )
             )
 
-        _audit(
+        await _audit(
             db,
             user,
             "document.upload",
@@ -559,7 +585,9 @@ async def upload_document(
             try:
                 await storage.delete(key)
             except OSError:
-                logger.exception("Could not clean up failed private document upload")
+                logger.exception(
+                    "Could not clean up failed private document upload"
+                )
 
         raise
 
@@ -655,7 +683,10 @@ async def _authorized(
         if report.patient_user_id == user.id:
             return True
 
-        if report.uploaded_by == user.id and report.laboratory_id is not None:
+        if (
+            report.uploaded_by == user.id
+            and report.laboratory_id is not None
+        ):
             try:
                 await require_verified_membership(
                     db,
@@ -710,17 +741,20 @@ async def permitted_document(
         document_id,
     )
 
-    if doc is None or doc.status in {
-        DocumentStatus.QUARANTINED,
-        DocumentStatus.WITHDRAWN,
-    }:
+    if (
+        doc is None
+        or doc.status in {
+            DocumentStatus.QUARANTINED,
+            DocumentStatus.WITHDRAWN,
+        }
+    ):
         _reject()
 
     if not await _authorized(db, user, doc):
         # Avoid revealing document existence.
         _reject()
 
-    _audit(
+    await _audit(
         db,
         user,
         "document.download" if content else "document.metadata_read",
