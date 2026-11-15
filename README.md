@@ -200,3 +200,16 @@ contract to supply the fields required by the patient profile schema. Profession
 requests must not include these patient fields. Repeated requests reconcile using
 the verified Firebase UID; matching email addresses do not merge accounts. Role
 seed data must be present. Account and profile changes are recorded in audit events.
+
+
+## Account support Admin assignment state — ML-42
+
+- Account search and status-update responses include `is_admin`.
+- `is_admin` indicates a current, non-revoked `admin` assignment.
+- A `super_admin` role alone does not count as an `admin` assignment.
+- Existing authorization and MFA requirements remain unchanged.
+- No database migration is required.
+
+Verification: all 9 account-support tests passed against a dedicated
+migrated PostgreSQL test database. Identity claims are mocked in these tests;
+live MFA-authenticated appointment/revocation verification remains pending.
