@@ -1,5 +1,6 @@
 """ML-40 contract and regression checks (no live database required)."""
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,11 +12,24 @@ from app.modules.verification import service
 from app.modules.verification.schemas import (
     ProfessionalProfileInput,
     VerificationApplicationInput,
+    VerificationApplicationRead,
     VerificationApplicationsReadPage,
 )
 
 
 class ContractTests(TestCase):
+    def test_application_response_uses_contract_fields(self):
+        evidence_id, reviewer_id = uuid4(), uuid4()
+        response = VerificationApplicationRead(
+            id=uuid4(), user_id=uuid4(), organization_id=None, role="doctor",
+            registration_number="SLMC-123", status="approved", submitted_at=datetime.now(UTC),
+            reviewed_by=reviewer_id, reviewed_at=datetime.now(UTC), review_reason=None,
+            evidence_document_ids=[evidence_id],
+        ).model_dump(mode="json")
+        self.assertEqual(response["evidence_document_ids"], [str(evidence_id)])
+        self.assertEqual(response["reviewed_by"], str(reviewer_id))
+        self.assertNotIn("document_ids", response)
+
     def test_application_required_fields(self):
         with self.assertRaises(ValidationError):
             VerificationApplicationInput()
