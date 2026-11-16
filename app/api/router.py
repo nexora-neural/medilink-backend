@@ -20,6 +20,7 @@ from app.modules.prescriptions.router import router as prescriptions_router
 from app.modules.profiles.router import router as profiles_router
 from app.modules.vaccinations.router import router as vaccinations_router
 from app.modules.verification.router import router as verification_router
+from app.modules.laboratory.router import router as laboratory_router
 
 api_router = APIRouter()
 
@@ -42,6 +43,7 @@ for module_router in (
     audit_router,
     integrations_router,
     fhir_router,
+    laboratory_router,
 ):
     api_router.include_router(module_router)
 
