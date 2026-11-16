@@ -30,6 +30,11 @@ from app.modules.profiles.schemas import (
 
 async def onboard_identity(session: AsyncSession, identity: dict, data: OnboardRequest):
     """Reconcile by verified Firebase UID without merging accounts by email."""
+    # Defense in depth: never create privileged roles even if another internal
+    # caller bypasses the public OnboardRequest Pydantic validation layer.
+    if data.requested_role not in {"patient", "doctor", "pharmacist", "lab_staff"}:
+        raise HTTPException(status_code=403, detail="Privileged onboarding is not allowed.")
+
     uid = identity["uid"]
     email = identity.get("email")
     if email is not None and not isinstance(email, str):
