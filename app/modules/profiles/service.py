@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,6 +34,21 @@ async def onboard_identity(session: AsyncSession, identity: dict, data: OnboardR
     email = identity.get("email")
     if email is not None and not isinstance(email, str):
         raise HTTPException(status_code=400, detail="Invalid verified identity.")
+    if data.phone:
+        digits = "".join(ch for ch in data.phone if ch.isdigit())
+        canonical = "0" + digits[2:] if digits.startswith("94") else digits
+        await session.execute(select(func.pg_advisory_xact_lock(func.hashtext(canonical))))
+        normalized = func.regexp_replace(User.phone, "[^0-9]", "", "g")
+        duplicate = await session.scalar(
+            select(User.id)
+            .where(
+                User.firebase_uid != uid,
+                normalized.in_([canonical, "94" + canonical[1:]]),
+            )
+            .limit(1)
+        )
+        if duplicate:
+            raise HTTPException(status_code=409, detail="Mobile number is already registered.")
     result = await session.execute(
         insert(User)
         .values(
@@ -47,9 +62,7 @@ async def onboard_identity(session: AsyncSession, identity: dict, data: OnboardR
         .returning(User.id)
     )
     created = result.scalar_one_or_none()
-    user = await session.scalar(
-        select(User).where(User.firebase_uid == uid).with_for_update()
-    )
+    user = await session.scalar(select(User).where(User.firebase_uid == uid).with_for_update())
     if user.status in {"suspended", "disabled"}:
         raise HTTPException(status_code=403, detail="The local account is inactive.")
     role = await session.scalar(select(Role).where(Role.code == data.requested_role))
@@ -69,17 +82,13 @@ async def onboard_identity(session: AsyncSession, identity: dict, data: OnboardR
     else:
         profile = await session.get(ProfessionalProfile, user.id)
         if profile is not None and profile.role != data.requested_role:
-            raise HTTPException(
-                status_code=409, detail="Professional role already exists."
-            )
+            raise HTTPException(status_code=409, detail="Professional role already exists.")
         if profile is None:
             session.add(
                 ProfessionalProfile(
                     user_id=user.id,
                     role=data.requested_role,
-                    doctor_reference=uuid4().hex
-                    if data.requested_role == "doctor"
-                    else None,
+                    doctor_reference=uuid4().hex if data.requested_role == "doctor" else None,
                 )
             )
     await session.flush()
