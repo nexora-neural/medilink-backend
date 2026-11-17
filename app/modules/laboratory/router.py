@@ -21,6 +21,7 @@ from app.modules.laboratory.schemas import (
     LabUploadRequestCreate,
     LabUploadRequestCreated,
     LabUploadRequestErrorResponse,
+    LabUploadRequestListQuery,
     LabUploadRequestPage,
     LabUploadRequestRead,
     LabUploadRequestResolve,
@@ -102,10 +103,11 @@ async def create_lab_upload_request(
 async def list_lab_upload_requests(
     db: DB,
     actor: Actor,
-    page: Annotated[int, Query(ge=1)] = 1,
-    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    query: Annotated[LabUploadRequestListQuery, Query()],
 ) -> LabUploadRequestPage:
-    return await service.list_requests(db, actor, page=page, page_size=page_size)
+    return await service.list_requests(
+        db, actor, page=query.page, page_size=query.page_size
+    )
 
 
 @router.post(
