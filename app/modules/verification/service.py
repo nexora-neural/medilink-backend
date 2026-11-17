@@ -16,6 +16,7 @@ from app.modules.verification import repository
 from app.modules.verification.models import (
     VerificationApplication,
     VerificationApplicationDocument,
+    VerificationDecision,
 )
 from app.modules.verification.schemas import (
     ProfessionalProfileInput,
@@ -23,6 +24,9 @@ from app.modules.verification.schemas import (
     VerificationApplicationInput,
     VerificationApplicationRead,
     VerificationApplicationsReadPage,
+    VerificationDecisionInput,
+    VerificationDecisionRead,
+    VerificationDecisionsReadPage,
 )
 
 PROFESSIONAL_ROLES = ("doctor", "pharmacist", "lab_staff")
@@ -312,3 +316,232 @@ async def list_own_applications(
     return VerificationApplicationsReadPage(
         items=items, page=page, page_size=page_size, total=total
     )
+
+
+async def _require_admin(db: AsyncSession, user: User, request: Request) -> None:
+    if user.status != "active":
+        raise _error(request, 403, "ACCESS_DENIED", "Permission denied.")
+    role_id = await db.scalar(
+        select(Role.id)
+        .join(UserRole, UserRole.role_id == Role.id)
+        .join(User, User.id == UserRole.user_id)
+        .where(
+            User.id == user.id,
+            User.status == "active",
+            UserRole.user_id == user.id,
+            UserRole.revoked_at.is_(None),
+            Role.code.in_(("admin", "super_admin")),
+        )
+        .limit(1)
+    )
+    if role_id is None:
+        raise _error(request, 403, "ACCESS_DENIED", "Permission denied.")
+
+
+async def list_review_applications(
+    db: AsyncSession,
+    user: User,
+    request: Request,
+    *,
+    page: int,
+    page_size: int,
+    status: str | None,
+    role: str | None,
+) -> VerificationApplicationsReadPage:
+    await _require_admin(db, user, request)
+    if status is not None and status not in {
+        "not_submitted", "pending", "approved", "rejected", "more_info_requested", "suspended"
+    }:
+        raise _error(request, 422, "VALIDATION_ERROR", "Invalid verification status filter.")
+    if role is not None and role not in PROFESSIONAL_ROLES:
+        raise _error(request, 422, "VALIDATION_ERROR", "Invalid professional role filter.")
+    applications, total = await repository.get_review_applications_page(
+        db, page=page, page_size=page_size, status=status, role=role
+    )
+    items = []
+    for application in applications:
+        evidence_ids = await repository.get_application_documents(db, application.id)
+        items.append(
+            VerificationApplicationRead.model_validate(application).model_copy(
+                update={"evidence_document_ids": evidence_ids}
+            )
+        )
+    return VerificationApplicationsReadPage(
+        items=items, page=page, page_size=page_size, total=total
+    )
+
+
+async def get_review_application(
+    db: AsyncSession, user: User, request: Request, application_id: UUID
+) -> VerificationApplicationRead:
+    await _require_admin(db, user, request)
+    application = await repository.get_application(db, application_id)
+    if application is None:
+        raise _error(request, 404, "RESOURCE_NOT_FOUND", "Verification application not found.")
+    evidence_ids = await repository.get_application_documents(db, application.id)
+    return VerificationApplicationRead.model_validate(application).model_copy(
+        update={"evidence_document_ids": evidence_ids}
+    )
+
+
+async def list_application_decisions(
+    db: AsyncSession,
+    user: User,
+    request: Request,
+    application_id: UUID,
+    *,
+    page: int,
+    page_size: int,
+) -> VerificationDecisionsReadPage:
+    await _require_admin(db, user, request)
+    if await repository.get_application(db, application_id) is None:
+        raise _error(request, 404, "RESOURCE_NOT_FOUND", "Verification application not found.")
+    decisions, total = await repository.get_application_decisions_page(
+        db, application_id, page=page, page_size=page_size
+    )
+    return VerificationDecisionsReadPage(
+        items=[VerificationDecisionRead.model_validate(item) for item in decisions],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+async def decide_application(
+    db: AsyncSession,
+    user: User,
+    request: Request,
+    application_id: UUID,
+    payload: VerificationDecisionInput,
+) -> VerificationApplicationRead:
+    await _require_admin(db, user, request)
+    try:
+        application = await repository.get_application(db, application_id, lock=True)
+        if application is None:
+            raise _error(
+                request, 404, "RESOURCE_NOT_FOUND", "Verification application not found."
+            )
+        if application.user_id == user.id:
+            raise _error(
+                request, 403, "ACCESS_DENIED", "Reviewers cannot decide their own application."
+            )
+        if application.status != "pending":
+            raise _error(
+                request,
+                409,
+                "INVALID_STATE",
+                "Only pending verification applications can be decided.",
+            )
+
+        profile = await repository.get_professional_profile(db, application.user_id, lock=True)
+        if profile is None or profile.role != application.role:
+            raise _error(
+                request,
+                409,
+                "INVALID_STATE",
+                "The applicant professional profile is inconsistent with this application.",
+            )
+
+        now = datetime.now(UTC)
+        previous_status = application.status
+        application.status = payload.status
+        application.reviewed_by = user.id
+        application.reviewed_at = now
+        application.review_reason = payload.reason
+        profile.verification_status = payload.status
+        db.add(
+            VerificationDecision(
+                application_id=application.id,
+                reviewer_user_id=user.id,
+                decision=payload.status,
+                reason=payload.reason,
+                decided_at=now,
+            )
+        )
+
+        if payload.status == "approved":
+            role_id = await db.scalar(select(Role.id).where(Role.code == application.role))
+            if role_id is None:
+                raise _error(
+                    request, 503, "SERVICE_UNAVAILABLE", "Professional role is unavailable."
+                )
+            assignment = await db.get(
+                UserRole, (application.user_id, role_id), with_for_update=True
+            )
+            if assignment is None:
+                db.add(
+                    UserRole(
+                        user_id=application.user_id,
+                        role_id=role_id,
+                        assigned_by=user.id,
+                        assigned_at=now,
+                    )
+                )
+            elif assignment.revoked_at is not None:
+                assignment.revoked_at = None
+                assignment.assigned_by = user.id
+                assignment.assigned_at = now
+
+            if application.organization_id is not None:
+                organization = await db.scalar(
+                    select(Organization)
+                    .where(Organization.id == application.organization_id)
+                    .with_for_update()
+                )
+                if organization is None or organization.status != "active":
+                    raise _error(
+                        request,
+                        409,
+                        "INVALID_STATE",
+                        "The requested organization is not active.",
+                    )
+                membership = await db.scalar(
+                    select(OrganizationMembership)
+                    .where(
+                        OrganizationMembership.organization_id == organization.id,
+                        OrganizationMembership.user_id == application.user_id,
+                        OrganizationMembership.role == application.role,
+                    )
+                    .with_for_update()
+                )
+                if membership is not None and membership.status == "suspended":
+                    raise _error(
+                        request,
+                        409,
+                        "INVALID_STATE",
+                        "A suspended organization membership cannot be approved here.",
+                    )
+                if membership is None:
+                    membership = OrganizationMembership(
+                        organization_id=organization.id,
+                        user_id=application.user_id,
+                        role=application.role,
+                        status="approved",
+                        verified_at=now,
+                    )
+                    db.add(membership)
+                else:
+                    membership.status = "approved"
+                    membership.verified_at = now
+
+        await _audit(
+            db,
+            request,
+            user.id,
+            "verification_application.decided",
+            "verification_application",
+            application.id,
+            {"role": application.role, "previous_status": previous_status,
+             "status": payload.status},
+        )
+        await db.flush()
+        await db.refresh(application)
+        evidence_ids = await repository.get_application_documents(db, application.id)
+        response = VerificationApplicationRead.model_validate(application).model_copy(
+            update={"evidence_document_ids": evidence_ids}
+        )
+        await db.commit()
+        return response
+    except Exception:
+        await db.rollback()
+        raise

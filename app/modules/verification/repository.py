@@ -11,6 +11,7 @@ from app.modules.profiles.models import ProfessionalProfile
 from app.modules.verification.models import (
     VerificationApplication,
     VerificationApplicationDocument,
+    VerificationDecision,
 )
 
 
@@ -57,6 +58,61 @@ async def get_user_applications_page(
         select(VerificationApplication)
         .where(VerificationApplication.user_id == user_id)
         .order_by(VerificationApplication.submitted_at.desc(), VerificationApplication.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    return list(result.all()), int(total or 0)
+
+
+async def get_review_applications_page(
+    db: AsyncSession,
+    *,
+    page: int,
+    page_size: int,
+    status: str | None,
+    role: str | None,
+) -> tuple[list[VerificationApplication], int]:
+    filters = []
+    if status is not None:
+        filters.append(VerificationApplication.status == status)
+    if role is not None:
+        filters.append(VerificationApplication.role == role)
+    total = await db.scalar(
+        select(func.count(VerificationApplication.id)).where(*filters)
+    )
+    result = await db.scalars(
+        select(VerificationApplication)
+        .where(*filters)
+        .order_by(VerificationApplication.submitted_at.desc(), VerificationApplication.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    return list(result.all()), int(total or 0)
+
+
+async def get_application(
+    db: AsyncSession, application_id: UUID, *, lock: bool = False
+) -> VerificationApplication | None:
+    statement = select(VerificationApplication).where(
+        VerificationApplication.id == application_id
+    )
+    if lock:
+        statement = statement.with_for_update()
+    return await db.scalar(statement)
+
+
+async def get_application_decisions_page(
+    db: AsyncSession, application_id: UUID, *, page: int, page_size: int
+) -> tuple[list[VerificationDecision], int]:
+    total = await db.scalar(
+        select(func.count(VerificationDecision.id)).where(
+            VerificationDecision.application_id == application_id
+        )
+    )
+    result = await db.scalars(
+        select(VerificationDecision)
+        .where(VerificationDecision.application_id == application_id)
+        .order_by(VerificationDecision.decided_at.desc(), VerificationDecision.id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
