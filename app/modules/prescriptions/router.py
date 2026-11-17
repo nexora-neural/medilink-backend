@@ -72,6 +72,25 @@ async def get_medicines(
         page_size=page_size,
     )
 
+@medicine_router.get(
+    "/admin/medicines",
+    response_model=MedicinesReadPage,
+    summary="List sample medicine catalogue entries for management",
+)
+async def get_admin_medicines(
+    request: Request,
+    session: SessionDep,
+    current_user: UserDep,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> MedicinesReadPage:
+    return await service.list_admin_medicines(
+        session=session,
+        user=current_user,
+        request=request,
+        page=page,
+        page_size=page_size,
+    )
 
 @medicine_router.post(
     "/admin/medicines",
