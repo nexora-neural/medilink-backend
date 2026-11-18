@@ -441,6 +441,15 @@ async def decide_application(
                 "INVALID_STATE",
                 "The applicant professional profile is inconsistent with this application.",
             )
+        if payload.status == "approved" and (
+            profile.registration_number != application.registration_number
+        ):
+            raise _error(
+                request,
+                409,
+                "INVALID_STATE",
+                "The application registration number no longer matches the professional profile.",
+            )
 
         now = datetime.now(UTC)
         previous_status = application.status

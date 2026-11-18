@@ -83,7 +83,11 @@ class VerificationAdminServiceTests(IsolatedAsyncioTestCase):
             reviewed_at=None,
             review_reason=None,
         )
-        self.profile = SimpleNamespace(role="doctor", verification_status="pending")
+        self.profile = SimpleNamespace(
+            role="doctor",
+            registration_number="SLMC-123",
+            verification_status="pending",
+        )
         self.db = MagicMock()
         self.db.scalar = AsyncMock(return_value=1)
         self.db.get = AsyncMock(return_value=None)

@@ -44,6 +44,7 @@ class VerificationAdminPostgreSQLTests(IsolatedAsyncioTestCase):
 
         self.reviewer = await self._create_user("ML48 reviewer", "admin")
         self.applicant = await self._create_user("ML48 applicant")
+        self.applicant_id = self.applicant.id
         self.profile = ProfessionalProfile(
             user_id=self.applicant.id,
             role="doctor",
@@ -200,6 +201,44 @@ class VerificationAdminPostgreSQLTests(IsolatedAsyncioTestCase):
                 )
             ),
             None,
+        )
+
+    async def test_registration_number_mismatch_cannot_be_approved(self):
+        self.profile.registration_number = "SLMC-ML48-UPDATED"
+        await self.session.flush()
+
+        response = await self.client.post(
+            f"{BASE_PATH}/{self.application_id}/decision",
+            json={"status": "approved", "reason": "Manually checked"},
+        )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        await self.session.refresh(self.application)
+        await self.session.refresh(self.profile)
+        self.assertEqual(self.application.status, "pending")
+        self.assertEqual(self.profile.verification_status, "pending")
+        self.assertIsNone(
+            await self.session.scalar(
+                select(UserRole).where(
+                    UserRole.user_id == self.applicant_id,
+                    UserRole.role_id == self.roles["doctor"],
+                )
+            )
+        )
+        self.assertIsNone(
+            await self.session.scalar(
+                select(VerificationDecision.id).where(
+                    VerificationDecision.application_id == self.application_id
+                )
+            )
+        )
+        self.assertIsNone(
+            await self.session.scalar(
+                select(AuditEvent.id).where(
+                    AuditEvent.target_id == self.application_id,
+                    AuditEvent.action == "verification_application.decided",
+                )
+            )
         )
 
     async def test_audit_failure_rolls_back_application_and_history(self):
