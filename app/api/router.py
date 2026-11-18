@@ -18,6 +18,7 @@ from app.modules.notifications.router import router as notifications_router
 from app.modules.organizations.router import router as organizations_router
 from app.modules.prescriptions.router import medicine_router
 from app.modules.prescriptions.router import router as prescriptions_router
+from app.modules.profiles.availability import router as availability_router
 from app.modules.profiles.router import router as profiles_router
 from app.modules.vaccinations.router import router as vaccinations_router
 from app.modules.verification.router import router as verification_router
@@ -27,6 +28,7 @@ api_router = APIRouter()
 for module_router in (
     identity_router,
     profiles_router,
+    availability_router,
     organizations_router,
     verification_router,
     consent_router,

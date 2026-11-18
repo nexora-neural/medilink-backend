@@ -1,5 +1,6 @@
 """Pydantic schemas for onboarding and profile updates."""
 
+import re
 from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
@@ -46,6 +47,13 @@ class OnboardRequest(ProfileInput):
     requested_role: Literal["patient", "doctor", "pharmacist", "lab_staff"]
     date_of_birth: date | None = None
     sex: Literal["female", "male"] | None = None
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value):
+        if value is not None and not re.fullmatch(r"(?:0\d{9}|\+94\d{9})", value):
+            raise ValueError("Enter a valid mobile number.")
+        return value
 
     @model_validator(mode="after")
     def validate_patient_fields(self):
