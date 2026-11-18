@@ -19109,9 +19109,6 @@
           "external_report_id": {
             "type": "string"
           },
-          "idempotency_key": {
-            "type": "string"
-          },
           "status": {
             "type": "string",
             "enum": [
@@ -19141,7 +19138,6 @@
           "client_id",
           "upload_request_id",
           "external_report_id",
-          "idempotency_key",
           "status",
           "received_at"
         ]

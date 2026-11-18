@@ -397,7 +397,7 @@ Path identifiers are UUIDs. `Idempotency-Key` marked **required** is a request h
 
 - `POST /api/v1/admin/integration-clients`: Approved lab only, reports:write only; random credential revealed once.
 - `POST /api/v1/admin/integration-clients/{client_id}/rotate`: Immediate old-key invalidation; credential hash never returned.
-- `GET /api/v1/admin/integration-submissions`:  Filters: `status`.
+- `GET /api/v1/admin/integration-submissions`: Filters: `status`; returns operational submission identifiers and outcomes without the client-supplied idempotency key or report payload.
 
 ### Mock integration
 
@@ -1095,7 +1095,6 @@ or replace the existing permission and MFA checks.
 | `client_id` | string (uuid) | Yes |
 | `upload_request_id` | string (uuid) | Yes |
 | `external_report_id` | string | Yes |
-| `idempotency_key` | string | Yes |
 | `status` | string: received, processing, accepted, rejected, failed | Yes |
 | `report_id` | string (uuid); nullable | No |
 | `received_at` | string (date-time) | Yes |
