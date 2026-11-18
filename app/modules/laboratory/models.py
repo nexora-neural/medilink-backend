@@ -65,6 +65,7 @@ class LabUploadRequest(Base):
         DateTime(timezone=True), server_default=text("now()")
     )
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revocation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ReportIdentity(Base):

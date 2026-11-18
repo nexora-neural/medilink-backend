@@ -11,6 +11,7 @@ from app.modules.documents.router import router as documents_router
 from app.modules.fhir.router import router as fhir_router
 from app.modules.identity.router import router as identity_router
 from app.modules.integrations.router import router as integrations_router
+from app.modules.laboratory.router import router as laboratory_router
 from app.modules.measurements.router import router as measurements_router
 from app.modules.medication.router import router as medication_router
 from app.modules.notifications.router import router as notifications_router
@@ -42,6 +43,7 @@ for module_router in (
     audit_router,
     integrations_router,
     fhir_router,
+    laboratory_router,
 ):
     api_router.include_router(module_router)
 
