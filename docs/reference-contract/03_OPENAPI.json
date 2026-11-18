@@ -19090,7 +19090,7 @@
           "created_at"
         ]
       },
-      "IntegrationSubmissionsRead": {
+      "IntegrationAdminSubmissionRead": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
@@ -19140,6 +19140,62 @@
           "external_report_id",
           "status",
           "received_at"
+        ]
+      },
+      "IntegrationSubmissionsRead": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "client_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "upload_request_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "external_report_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "received",
+              "processing",
+              "accepted",
+              "rejected",
+              "failed"
+            ]
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "received_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error_code": {
+            "type": "string",
+            "nullable": true
+          },
+          "idempotency_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "client_id",
+          "upload_request_id",
+          "external_report_id",
+          "status",
+          "received_at",
+          "idempotency_key"
         ]
       },
       "AuditEventsRead": {
@@ -22530,7 +22586,7 @@
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/IntegrationSubmissionsRead"
+              "$ref": "#/components/schemas/IntegrationAdminSubmissionRead"
             }
           },
           "page": {

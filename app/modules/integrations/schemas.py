@@ -63,7 +63,7 @@ class IntegrationClientsReadPage(BaseModel):
     total: int
 
 
-class IntegrationSubmissionRead(BaseModel):
+class IntegrationAdminSubmissionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
@@ -76,8 +76,14 @@ class IntegrationSubmissionRead(BaseModel):
     error_code: str | None = None
 
 
+class IntegrationSubmissionRead(IntegrationAdminSubmissionRead):
+    """Report submission/correction response preserving request idempotency."""
+
+    idempotency_key: str
+
+
 class IntegrationSubmissionsReadPage(BaseModel):
-    items: list[IntegrationSubmissionRead]
+    items: list[IntegrationAdminSubmissionRead]
     page: int
     page_size: int
     total: int

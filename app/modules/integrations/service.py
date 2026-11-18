@@ -16,10 +16,10 @@ from app.modules.integrations import repository
 from app.modules.integrations.models import IntegrationClient, SubmissionStatus
 from app.modules.integrations.schemas import (
     CredentialCreated,
+    IntegrationAdminSubmissionRead,
     IntegrationClientInput,
     IntegrationClientRead,
     IntegrationClientsReadPage,
-    IntegrationSubmissionRead,
     IntegrationSubmissionsReadPage,
     ReasonInput,
     RotateCredential,
@@ -274,7 +274,7 @@ async def list_submissions(
         db, page=page, page_size=page_size, status=status_filter
     )
     return IntegrationSubmissionsReadPage(
-        items=[IntegrationSubmissionRead.model_validate(row) for row in rows],
+        items=[IntegrationAdminSubmissionRead.model_validate(row) for row in rows],
         page=page,
         page_size=page_size,
         total=total,

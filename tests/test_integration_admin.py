@@ -21,6 +21,7 @@ from app.modules.identity.models import AccountSupportDecisionReason, Role, User
 from app.modules.identity.request_limits import require_authenticated_rate_limit
 from app.modules.integrations.auth import get_active_integration_client
 from app.modules.integrations.models import IntegrationClient, IntegrationSubmission
+from app.modules.integrations.schemas import IntegrationSubmissionRead
 from app.modules.laboratory.models import LabUploadRequest, UploadRequestStatus
 from app.modules.organizations.models import Organization, OrganizationMembership
 from app.modules.profiles.models import PatientProfile, ProfessionalProfile
@@ -303,6 +304,28 @@ class IntegrationAdminPostgresTests(IsolatedAsyncioTestCase):
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(response.json()["client_id"], client_id)
 
+                rotate_response = await self.client.post(
+                    f"{CLIENTS}/{client_id}/rotate",
+                    json={
+                        "expires_at": (datetime.now(UTC) + timedelta(days=60)).isoformat(),
+                        "reason": "Verify immediate credential invalidation",
+                    },
+                )
+                self.assertEqual(rotate_response.status_code, 201, rotate_response.text)
+                rotated_credential = rotate_response.json()["credential"]
+                self.assertNotEqual(credential, rotated_credential)
+
+                old_key_response = await probe.get(
+                    "/protected-report-write", headers={"X-API-Key": credential}
+                )
+                self.assertEqual(old_key_response.status_code, 401, old_key_response.text)
+                new_key_response = await probe.get(
+                    "/protected-report-write", headers={"X-API-Key": rotated_credential}
+                )
+                self.assertEqual(new_key_response.status_code, 200, new_key_response.text)
+                self.assertEqual(new_key_response.json()["client_id"], client_id)
+
+                credential = rotated_credential
                 admin_response = await self.client.post(
                     f"{CLIENTS}/{client_id}/suspend", json={"reason": "Testing suspension"}
                 )
@@ -368,6 +391,8 @@ class IntegrationAdminPostgresTests(IsolatedAsyncioTestCase):
         )
         self.session.add(submission)
         await self.session.commit()
+        report_response = IntegrationSubmissionRead.model_validate(submission)
+        self.assertEqual(report_response.idempotency_key, "synthetic-idempotency-key")
         response = await self.client.get(SUBMISSIONS, params={"status": "rejected"})
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()
