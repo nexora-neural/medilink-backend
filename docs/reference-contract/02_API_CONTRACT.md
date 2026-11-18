@@ -397,7 +397,7 @@ Path identifiers are UUIDs. `Idempotency-Key` marked **required** is a request h
 
 - `POST /api/v1/admin/integration-clients`: Approved lab only, reports:write only; random credential revealed once.
 - `POST /api/v1/admin/integration-clients/{client_id}/rotate`: Immediate old-key invalidation; credential hash never returned.
-- `GET /api/v1/admin/integration-submissions`:  Filters: `status`.
+- `GET /api/v1/admin/integration-submissions`: Filters: `status`; returns operational submission identifiers and outcomes without the client-supplied idempotency key or report payload.
 
 ### Mock integration
 
@@ -1087,7 +1087,7 @@ or replace the existing permission and MFA checks.
 | `created_at` | string (date-time) | Yes |
 | `revoked_at` | string (date-time); nullable | No |
 
-### IntegrationSubmissionsRead
+### IntegrationAdminSubmissionRead
 
 | Field | Type / validation | Required |
 |---|---|---|
@@ -1095,11 +1095,28 @@ or replace the existing permission and MFA checks.
 | `client_id` | string (uuid) | Yes |
 | `upload_request_id` | string (uuid) | Yes |
 | `external_report_id` | string | Yes |
-| `idempotency_key` | string | Yes |
 | `status` | string: received, processing, accepted, rejected, failed | Yes |
 | `report_id` | string (uuid); nullable | No |
 | `received_at` | string (date-time) | Yes |
 | `error_code` | string; nullable | No |
+
+This sanitized schema is used only by the Super Admin integration-submission listing. It intentionally omits the client-supplied `idempotency_key` and report payload.
+
+### IntegrationSubmissionsRead
+
+This response schema extends `IntegrationAdminSubmissionRead` with the idempotency key from the request, for use by report submission and correction responses.
+
+| Field | Type / validation | Required |
+|---|---|---|
+| `id` | string (uuid) | Yes |
+| `client_id` | string (uuid) | Yes |
+| `upload_request_id` | string (uuid) | Yes |
+| `external_report_id` | string | Yes |
+| `status` | string: received, processing, accepted, rejected, failed | Yes |
+| `report_id` | string (uuid); nullable | No |
+| `received_at` | string (date-time) | Yes |
+| `error_code` | string; nullable | No |
+| `idempotency_key` | string | Yes |
 
 ### AuditEventsRead
 
@@ -2127,7 +2144,7 @@ or replace the existing permission and MFA checks.
 
 | Field | Type / validation | Required |
 |---|---|---|
-| `items` | array<IntegrationSubmissionsRead> | Yes |
+| `items` | array<IntegrationAdminSubmissionRead> | Yes |
 | `page` | integer | Yes |
 | `page_size` | integer | Yes |
 | `total` | integer | Yes |
