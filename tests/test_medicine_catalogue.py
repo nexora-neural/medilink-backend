@@ -112,3 +112,33 @@ class MedicineCatalogueTests(IsolatedAsyncioTestCase):
         self.assertEqual(event.actor_user_id, self.actor.id)
         response = await self.client.post("/api/v1/admin/medicines", json={"generic_name": " "})
         self.assertEqual(response.status_code, 422)
+
+    async def test_management_list_returns_saved_entry_and_denies_regular_admin(self):
+        path = "/api/v1/admin/medicines"
+        payload = {
+            "generic_name": "Catalogue test medicine",
+            "brand_name": "Catalogue test brand",
+            "strength": "500 mg",
+            "form": "Tablet",
+        }
+
+        self.actor = self.users["admin"]
+        denied = await self.client.get(path)
+        self.assertEqual(denied.status_code, 403)
+        self.assertEqual(denied.json()["code"], "ACCESS_DENIED")
+
+        self.actor = self.users["super_admin"]
+        created = await self.client.post(path, json=payload)
+        self.assertEqual(created.status_code, 201, created.text)
+
+        listed = await self.client.get(path)
+        self.assertEqual(listed.status_code, 200, listed.text)
+
+        saved_id = created.json()["id"]
+        saved = next(
+            (row for row in listed.json()["items"] if row["id"] == saved_id),
+            None,
+        )
+        self.assertIsNotNone(saved)
+        self.assertTrue(saved["is_sample"])
+        self.assertEqual({field: saved[field] for field in payload}, payload)

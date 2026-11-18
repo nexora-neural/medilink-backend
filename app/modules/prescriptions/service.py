@@ -107,6 +107,26 @@ async def require_medicine_admin(
     raise forbidden(request)
 
 
+async def _read_medicine_page(
+    session: AsyncSession,
+    q: str | None,
+    page: int,
+    page_size: int,
+) -> MedicinesReadPage:
+    medicines, total = await repository.get_medicines(
+        session=session,
+        q=q,
+        page=page,
+        page_size=page_size,
+    )
+    return MedicinesReadPage(
+        items=[MedicinesRead.model_validate(medicine) for medicine in medicines],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
 async def list_medicines(
     session: AsyncSession,
     user: User,
@@ -115,27 +135,19 @@ async def list_medicines(
     page: int,
     page_size: int,
 ) -> MedicinesReadPage:
-    """Return searchable sample catalogue entries."""
+    await require_medicine_reader(session=session, user=user, request=request)
+    return await _read_medicine_page(session, q, page, page_size)
 
-    await require_medicine_reader(
-        session=session,
-        user=user,
-        request=request,
-    )
 
-    medicines, total = await repository.get_medicines(
-        session=session,
-        q=q,
-        page=page,
-        page_size=page_size,
-    )
-
-    return MedicinesReadPage(
-        items=[MedicinesRead.model_validate(medicine) for medicine in medicines],
-        page=page,
-        page_size=page_size,
-        total=total,
-    )
+async def list_admin_medicines(
+    session: AsyncSession,
+    user: User,
+    request: Request,
+    page: int,
+    page_size: int,
+) -> MedicinesReadPage:
+    await require_medicine_admin(session=session, user=user, request=request)
+    return await _read_medicine_page(session, None, page, page_size)
 
 
 async def add_medicine(
