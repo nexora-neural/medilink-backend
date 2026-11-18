@@ -111,11 +111,13 @@ Path identifiers are UUIDs. `Idempotency-Key` marked **required** is a request h
 | `GET /api/v1/admin/verification-applications` | List review queue | Admin or Super Admin: delegated administrative permissions | No body → VerificationApplicationsReadPage (200) |
 | `GET /api/v1/admin/verification-applications/{application_id}` | Get application/evidence references | Admin or Super Admin: delegated administrative permissions | No body → VerificationApplicationsRead (200) |
 | `POST /api/v1/admin/verification-applications/{application_id}/decision` | Record verification decision | Admin or Super Admin: delegated administrative permissions | VerificationDecision → VerificationApplicationsRead (201) |
+| `GET /api/v1/admin/verification-applications/{application_id}/decisions` | Read append-only decision history | Admin or Super Admin: delegated administrative permissions | No body → VerificationDecisionsReadPage (200) |
 
 - `POST /api/v1/verification-applications`: Evidence IDs must be caller-owned private verification documents. Evidence can be uploaded before application creation.
 - `GET /api/v1/admin/verification-applications`:  Filters: `status`, `role`.
 - `GET /api/v1/admin/verification-applications/{application_id}`: Response includes evidence_document_ids after schema migration; files use authorized content route.
-- `POST /api/v1/admin/verification-applications/{application_id}/decision`: Reviewer cannot approve their own application. Approval updates professional/membership state transactionally; retain decision history.
+- `POST /api/v1/admin/verification-applications/{application_id}/decision`: Only pending applications can be decided. Reviewer cannot decide their own application. Approval updates professional role and optional organization membership transactionally; retain reviewer, decision, reason, and time in append-only history. SLMC and other registration details are manually reviewed; the API does not claim automatic verification.
+- `GET /api/v1/admin/verification-applications/{application_id}/decisions`: Returns the append-only history in reverse chronological order, with `page` and `page_size` pagination (1–100).
 
 ### Consent
 

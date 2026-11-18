@@ -1,6 +1,7 @@
 """Request and response contracts for professional verification applications."""
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -76,6 +77,36 @@ class VerificationApplicationRead(BaseModel):
 
 class VerificationApplicationsReadPage(BaseModel):
     items: list[VerificationApplicationRead]
+    page: int
+    page_size: int
+    total: int
+
+
+class VerificationDecisionInput(VerificationInput):
+    status: Literal["approved", "rejected", "more_info_requested"]
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def nonblank_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Decision reason must not be blank.")
+        return value
+
+
+class VerificationDecisionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    application_id: UUID
+    reviewer_user_id: UUID
+    decision: str
+    reason: str
+    decided_at: datetime
+
+
+class VerificationDecisionsReadPage(BaseModel):
+    items: list[VerificationDecisionRead]
     page: int
     page_size: int
     total: int
