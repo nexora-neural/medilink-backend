@@ -1,13 +1,14 @@
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, StringConstraints
 
-DoctorReference = Annotated[str, StringConstraints(min_length=1)]
+DoctorReference = Annotated[str, StringConstraints(min_length=1, max_length=256)]
 
 
 class DoctorQrRead(BaseModel):
     doctor_reference: DoctorReference
+    qr_payload: str
 
 
 class DoctorQrResolveRequest(BaseModel):
@@ -21,7 +22,9 @@ class DoctorQrClinicRead(BaseModel):
     name: str
 
 
-class DoctorQrResolveRead(BaseModel):
+class ProfessionalIdentity(BaseModel):
+    user_id: UUID
+    role: Literal["doctor"]
     display_name: str
     verification_status: str
     clinics: list[DoctorQrClinicRead]

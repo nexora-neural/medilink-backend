@@ -10,7 +10,7 @@ from app.modules.identity.request_limits import require_resolution_rate_limit
 from app.modules.profiles.route import ProfileRoute
 
 from . import service
-from .schemas import DoctorQrRead, DoctorQrResolveRead, DoctorQrResolveRequest
+from .schemas import DoctorQrRead, DoctorQrResolveRequest, ProfessionalIdentity
 
 router = APIRouter(tags=["Doctor QR"], route_class=ProfileRoute)
 
@@ -30,7 +30,7 @@ async def get_my_doctor_qr(
 
 @router.post(
     "/doctor-qr/resolve",
-    response_model=DoctorQrResolveRead,
+    response_model=ProfessionalIdentity,
     dependencies=[Depends(require_resolution_rate_limit)],
 )
 async def resolve_doctor_qr(
@@ -38,6 +38,6 @@ async def resolve_doctor_qr(
     db: DB,
     actor: Actor,
     response: Response,
-) -> DoctorQrResolveRead:
+) -> ProfessionalIdentity:
     response.headers["Cache-Control"] = "no-store"
     return await service.resolve_doctor_qr(db, actor, payload.doctor_reference)
