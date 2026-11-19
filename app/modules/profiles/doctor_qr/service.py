@@ -5,7 +5,7 @@ from app.modules.identity.authorization import require_role
 from app.modules.identity.models import User
 
 from . import repository
-from .schemas import DoctorQrClinicRead, DoctorQrRead, ProfessionalIdentity
+from .schemas import DoctorQrRead, ProfessionalIdentity
 
 
 async def get_my_doctor_qr(db: AsyncSession, actor: User) -> DoctorQrRead:
@@ -43,19 +43,18 @@ async def resolve_doctor_qr(
         )
 
     user, profile = doctor
-    clinics: list[DoctorQrClinicRead] = []
-
-    if profile.verification_status == "approved":
-        organizations = await repository.list_approved_doctor_clinics(db, user.id)
-        clinics = [
-            DoctorQrClinicRead(id=organization.id, name=organization.name)
-            for organization in organizations
-        ]
-
-    return ProfessionalIdentity(
+    identity = ProfessionalIdentity(
         user_id=user.id,
         role="doctor",
         display_name=user.display_name,
         verification_status=profile.verification_status,
-        clinics=clinics,
     )
+
+    if profile.verification_status == "approved":
+        organizations = await repository.list_approved_doctor_clinics(db, user.id)
+        if organizations:
+            organization = organizations[0]
+            identity.organization_id = organization.id
+            identity.organization_name = organization.name
+
+    return identity

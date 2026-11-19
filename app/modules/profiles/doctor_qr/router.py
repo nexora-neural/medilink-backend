@@ -31,6 +31,7 @@ async def get_my_doctor_qr(
 @router.post(
     "/doctor-qr/resolve",
     response_model=ProfessionalIdentity,
+    response_model_exclude_none=True,
     dependencies=[Depends(require_resolution_rate_limit)],
 )
 async def resolve_doctor_qr(

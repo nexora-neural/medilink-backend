@@ -17,14 +17,12 @@ class DoctorQrResolveRequest(BaseModel):
     doctor_reference: DoctorReference
 
 
-class DoctorQrClinicRead(BaseModel):
-    id: UUID
-    name: str
-
-
 class ProfessionalIdentity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     user_id: UUID
     role: Literal["doctor"]
     display_name: str
     verification_status: str
-    clinics: list[DoctorQrClinicRead]
+    organization_id: UUID | None = None
+    organization_name: str | None = None

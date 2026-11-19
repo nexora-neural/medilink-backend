@@ -3,10 +3,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
+from fastapi.routing import serialize_response
 from pydantic import ValidationError
 
 from app.modules.profiles.doctor_qr import service
+from app.modules.profiles.doctor_qr.router import router
 from app.modules.profiles.doctor_qr.schemas import DoctorQrResolveRequest
 
 
@@ -47,38 +49,65 @@ class DoctorQrTests(unittest.IsolatedAsyncioTestCase):
         db.scalar.assert_awaited_once()
         find.assert_not_awaited()
 
-    async def test_resolve_returns_doctor_identity_to_patient(self):
+    async def test_resolve_returns_professional_identity_contract(self):
         db = AsyncMock()
         db.scalar.return_value = 1
         actor = SimpleNamespace(id=uuid4(), status="active")
         doctor = SimpleNamespace(id=uuid4(), display_name="Test Doctor")
         profile = SimpleNamespace(verification_status="approved")
         clinic = SimpleNamespace(id=uuid4(), name="Test Clinic")
-
-        with (
-            patch.object(
-                service.repository,
-                "find_active_doctor_by_reference",
-                return_value=(doctor, profile),
-            ),
-            patch.object(
-                service.repository,
-                "list_approved_doctor_clinics",
-                return_value=[clinic],
-            ),
-        ):
-            result = await service.resolve_doctor_qr(db, actor, "TEST-reference")
-
-        self.assertEqual(
-            result.model_dump(),
-            {
-                "user_id": doctor.id,
-                "role": "doctor",
-                "display_name": "Test Doctor",
-                "verification_status": "approved",
-                "clinics": [{"id": clinic.id, "name": "Test Clinic"}],
-            },
+        route = next(
+            route for route in router.routes if route.path == "/doctor-qr/resolve"
         )
+
+        base_response = {
+            "user_id": str(doctor.id),
+            "role": "doctor",
+            "display_name": "Test Doctor",
+            "verification_status": "approved",
+        }
+
+        for organizations, expected in (
+                (
+                        [clinic],
+                        {
+                            **base_response,
+                            "organization_id": str(clinic.id),
+                            "organization_name": clinic.name,
+                        },
+                ),
+                ([], base_response),
+        ):
+            with self.subTest(has_organization=bool(organizations)):
+                with (
+                    patch.object(
+                        service.repository,
+                        "find_active_doctor_by_reference",
+                        return_value=(doctor, profile),
+                    ),
+                    patch.object(
+                        service.repository,
+                        "list_approved_doctor_clinics",
+                        return_value=organizations,
+                    ),
+                ):
+                    result = await route.endpoint(
+                        payload=DoctorQrResolveRequest(
+                            doctor_reference="TEST-reference",
+                        ),
+                        db=db,
+                        actor=actor,
+                        response=Response(),
+                    )
+
+                body = await serialize_response(
+                    field=route.response_field,
+                    response_content=result,
+                    exclude_none=route.response_model_exclude_none,
+                    is_coroutine=True,
+                )
+
+                self.assertEqual(body, expected)
 
     async def test_unknown_reference_returns_404(self):
         db = AsyncMock()
