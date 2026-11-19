@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter
 
 from app.database.session import check_database_connection
@@ -19,6 +18,7 @@ from app.modules.organizations.router import router as organizations_router
 from app.modules.prescriptions.router import medicine_router
 from app.modules.prescriptions.router import router as prescriptions_router
 from app.modules.profiles.availability import router as availability_router
+from app.modules.profiles.doctor_qr.router import router as doctor_qr_router
 from app.modules.profiles.router import router as profiles_router
 from app.modules.vaccinations.router import router as vaccinations_router
 from app.modules.verification.router import router as verification_router
@@ -46,6 +46,7 @@ for module_router in (
     integrations_router,
     fhir_router,
     laboratory_router,
+    doctor_qr_router,
 ):
     api_router.include_router(module_router)
 
