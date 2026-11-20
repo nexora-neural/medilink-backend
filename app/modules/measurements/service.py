@@ -1,7 +1,6 @@
-import hashlib
-import json
-
-from sqlalchemy import text
+from app.core.idempotency import (
+    IdempotencyConflict, IdempotencyScope, lock_and_replay, request_digest, save_success,
+)
 
 from app.modules.audit.service import append_event
 
@@ -109,23 +108,13 @@ async def correct_measurement(db, actor, measurement_id, body, key, request_id, 
     if not actor["is_patient"] or original["source"] != "patient":
         raise MeasurementError(403, "FORBIDDEN", "Only your own patient entries can be corrected.")
 
-    digest = hashlib.sha256(json.dumps(
-        request_json, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
-    ).encode()).hexdigest()
-    scope = dict(actor=actor["id"], target=str(measurement_id), key=key)
-    previous = await fetch_one(db, """
-        SELECT request_digest, response_body FROM api_idempotency_records
-        WHERE actor_type = 'user' AND actor_id = :actor
-          AND operation_key = 'correctPatientMeasurement'
-          AND target_key = :target AND idempotency_key = :key
-    """, **scope)
+    scope = IdempotencyScope("user", actor["id"], "correctPatientMeasurement", str(measurement_id), key)
+    digest = request_digest(request_json)
+    try:
+        previous = await lock_and_replay(db, scope, digest, fetch_one)
+    except IdempotencyConflict as exc:
+        raise MeasurementError(409, "IDEMPOTENCY_CONFLICT", str(exc)) from exc
     if previous is not None:
-        if previous["request_digest"] != digest:
-            raise MeasurementError(
-                409,
-                "IDEMPOTENCY_CONFLICT",
-                "This key was used with a different request.",
-            )
         return MeasurementsRead.model_validate(previous["response_body"])
     if original["status"] != "active":
         raise MeasurementError(409, "STALE_VERSION", "Reload and correct the current version.")
@@ -143,13 +132,5 @@ async def correct_measurement(db, actor, measurement_id, body, key, request_id, 
     await audit(db, actor["id"], "measurement.corrected", reading, request_id, {
         "supersedes_id": str(measurement_id), "source": "patient",
     })
-    await db.execute(text("""
-        INSERT INTO api_idempotency_records (
-            actor_type, actor_id, operation_key, target_key, idempotency_key,
-            request_digest, response_status, response_body, expires_at
-        ) VALUES (
-            'user', :actor, 'correctPatientMeasurement', :target, :key,
-            :digest, 201, CAST(:body AS jsonb), 'infinity'::timestamptz
-        )
-    """), dict(**scope, digest=digest, body=reading.model_dump_json()))
+    await save_success(db, scope, digest, 201, reading.model_dump(mode="json"))
     return reading
