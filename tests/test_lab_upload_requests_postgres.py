@@ -199,6 +199,57 @@ class LabUploadRequestPostgresTests(IsolatedAsyncioTestCase):
             ],
         )
 
+
+    async def test_pending_applicant_cannot_resolve_laboratory_request(self):
+        request_id, token = await self.create_request()
+
+        applicant = User(
+            firebase_uid=str(uuid4()),
+            display_name="ML-50 Pending Applicant",
+            status="pending",
+        )
+        self.db.add(applicant)
+        await self.db.flush()
+
+        self.db.add(
+            ProfessionalProfile(
+                user_id=applicant.id,
+                role="lab_staff",
+                verification_status="pending",
+            )
+        )
+        await self.db.commit()
+
+        self.actor = applicant
+
+        response = await self.client.post(
+            RESOLVE_URL,
+            json={
+                "laboratory_id": str(self.lab.id),
+                "request_token": token,
+            },
+        )
+
+        self.assertEqual(response.status_code, 403, response.text)
+
+        row = await self.db.get(
+            LabUploadRequest,
+            request_id,
+            populate_existing=True,
+        )
+        self.assertIsNotNone(row)
+        self.assertIsNone(row.used_at)
+
+        events = await self.db.scalars(
+            select(AuditEvent).where(
+                AuditEvent.target_type == "lab_upload_request",
+                AuditEvent.target_id == request_id,
+                AuditEvent.action == "lab_upload_request.resolved",
+            )
+        )
+        self.assertEqual(list(events), [])
+
+
     async def test_expired_request_is_listed_but_cannot_be_resolved_or_revoked(self):
         request_id, token = await self.create_request()
         row = await self.db.get(LabUploadRequest, request_id)
