@@ -4,8 +4,9 @@ These tests need no running PostgreSQL or Firebase account. They exercise the
 real FastAPI route and Pydantic schema while overriding external dependencies.
 """
 
+from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, TestCase
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
@@ -126,3 +127,67 @@ class PublicOnboardingRouteTests(IsolatedAsyncioTestCase):
                 self.assertEqual(caught.exception.status_code, 403)
                 session.execute.assert_not_awaited()
                 session.scalar.assert_not_awaited()
+
+
+class ProfessionalOnboardingSecurityTests(IsolatedAsyncioTestCase):
+    async def test_professional_onboarding_does_not_assign_professional_role(self):
+        for requested_role in ("doctor", "pharmacist", "lab_staff"):
+            with self.subTest(role=requested_role):
+                session = AsyncMock()
+                session.add = MagicMock()
+
+                user = SimpleNamespace(
+                    id="synthetic-user-id",
+                    status="active",
+                )
+                role = SimpleNamespace(
+                    id="synthetic-role-id",
+                    code=requested_role,
+                )
+                profile = SimpleNamespace(role=requested_role)
+
+                insert_result = MagicMock()
+                insert_result.scalar_one_or_none.return_value = None
+                session.execute.return_value = insert_result
+
+                session.scalar.side_effect = [user, role]
+                session.get.side_effect = [None, profile]
+
+                data = OnboardRequest.model_validate(
+                    {
+                        "display_name": "Synthetic Professional",
+                        "requested_role": requested_role,
+                    }
+                )
+
+                with (
+                    patch(
+                        "app.modules.profiles.service.build_me_response",
+                        new_callable=AsyncMock,
+                    ) as build_response,
+                    patch(
+                        "app.modules.profiles.service.ProfessionalProfileResponse.model_validate",
+                        return_value=MagicMock(),
+                    ),
+                ):
+                    build_response.return_value = MagicMock()
+
+                    await onboard_identity(
+                        session,
+                        {"uid": "synthetic-professional"},
+                        data,
+                    )
+
+                # Only the User insert should execute.
+                # No UserRole insert is allowed for pending applicants.
+                session.execute.assert_awaited_once()
+
+                # A professional profile must still be created.
+                session.add.assert_called_once()
+
+                created_profile = session.add.call_args.args[0]
+                self.assertEqual(created_profile.role, requested_role)
+                self.assertEqual(
+                    created_profile.verification_status,
+                    "not_submitted",
+                )
