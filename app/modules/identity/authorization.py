@@ -50,10 +50,8 @@ async def require_patient_source_correction(
         deny()
 
 
-async def require_verified_membership(
-    session: AsyncSession, user: User, role: str, organization_id: UUID
-) -> None:
-    """Require an approved professional and approved membership of an active organization."""
+async def require_verified_professional(session: AsyncSession, user: User, role: str) -> None:
+    """Require an active account, current role and approved professional profile."""
     await require_role(session, user, role)
     profile = await session.scalar(
         select(ProfessionalProfile.user_id).where(
@@ -62,6 +60,15 @@ async def require_verified_membership(
             ProfessionalProfile.verification_status == "approved",
         )
     )
+    if profile is None:
+        deny()
+
+
+async def require_verified_membership(
+    session: AsyncSession, user: User, role: str, organization_id: UUID
+) -> None:
+    """Require an approved professional and approved membership of an active organization."""
+    await require_verified_professional(session, user, role)
     membership = await session.scalar(
         select(OrganizationMembership.id).join(
             Organization, Organization.id == OrganizationMembership.organization_id
@@ -73,7 +80,7 @@ async def require_verified_membership(
             Organization.status == "active",
         )
     )
-    if profile is None or membership is None:
+    if membership is None:
         deny()
 
 
@@ -81,7 +88,7 @@ async def require_doctor_grant(
     session: AsyncSession,
     user: User,
     patient_id: UUID,
-    organization_id: UUID,
+    organization_id: UUID | None,
     category: str,
     *,
     clinical_write: bool = False,
@@ -92,7 +99,10 @@ async def require_doctor_grant(
         "measurements_vaccinations", "medication_logs",
     }:
         deny()
-    await require_verified_membership(session, user, "doctor", organization_id)
+    if organization_id is None:
+        await require_verified_professional(session, user, "doctor")
+    else:
+        await require_verified_membership(session, user, "doctor", organization_id)
     now = datetime.now(UTC)
     grant_ids = select(AccessGrant.id).join(
         GrantCategory, GrantCategory.grant_id == AccessGrant.id
@@ -112,6 +122,7 @@ async def require_doctor_grant(
             Consultation.patient_user_id == patient_id,
             Consultation.doctor_user_id == user.id,
             Consultation.organization_id == organization_id,
+            Consultation.started_at <= now,
             Consultation.ended_at.is_(None),
         )
     if await session.scalar(grant_ids.limit(1)) is None:
