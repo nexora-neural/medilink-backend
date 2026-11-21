@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Text,
     text,
 )
 from sqlalchemy.dialects.postgresql import ENUM, UUID
@@ -112,6 +113,8 @@ class AccessGrant(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+
+    revocation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
