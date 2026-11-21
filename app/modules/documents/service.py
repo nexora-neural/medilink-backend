@@ -610,7 +610,6 @@ async def _doctor_can_read(
                 AccessGrant.patient_user_id == patient_id,
                 AccessGrant.professional_user_id == user.id,
                 GrantCategory.category == category,
-                AccessGrant.organization_id.is_not(None),
             )
         )
     ).all()

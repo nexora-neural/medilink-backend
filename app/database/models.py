@@ -19,6 +19,7 @@ from app.modules.organizations import models as _organizations_models
 from app.modules.organizations.models import Organization, OrganizationMembership
 from app.modules.prescriptions import core_models as _prescription_core_models
 from app.modules.prescriptions import models as _prescriptions_models
+from app.modules.prescriptions import ocr_template_models as _prescription_ocr_template_models
 from app.modules.prescriptions import review_models as _prescription_review_models
 from app.modules.profiles import models as _profiles_models
 from app.modules.vaccinations import models as _vaccinations_models
