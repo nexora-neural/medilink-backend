@@ -1,13 +1,13 @@
 """Add retained OCR jobs and doctor-owned prescription templates.
 
 Revision ID: prescription_ocr_templates
-Revises: 74f97cc7d042
+Revises: e0acececea38
 """
 
 from alembic import op
 
 revision = "prescription_ocr_templates"
-down_revision = "74f97cc7d042"
+down_revision = "e0acececea38"
 branch_labels = None
 depends_on = None
 
