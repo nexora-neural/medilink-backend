@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.database.session import get_session
 from app.main import app
+from app.modules.audit.models import AuditEvent
 from app.modules.consent.models import AccessGrant, GrantCategory
+from app.modules.consultations.models import Consultation
 from app.modules.identity.auth import get_current_user
 from app.modules.identity.authorization import require_doctor_grant
 from app.modules.identity.models import Role, User, UserRole
@@ -358,3 +360,58 @@ class ConsultationPostgresTests(IsolatedAsyncioTestCase):
         organization.status = "suspended"
         await self.db.commit()
         await self.assert_context_is_blocked(grant, consultation_id)
+
+    async def test_duplicate_start_is_rejected_and_end_blocks_writes(self):
+        grant = await self.create_grant()
+
+        first = await self.start(grant)
+        self.assertEqual(first.status_code, 201, first.text)
+        consultation_id = UUID(first.json()["id"])
+
+        duplicate = await self.start(grant)
+        self.assertEqual(duplicate.status_code, 409, duplicate.text)
+        self.assertEqual(duplicate.json()["code"], "INVALID_STATE")
+
+        consultations = (
+            await self.db.scalars(select(Consultation).where(Consultation.grant_id == grant.id))
+        ).all()
+        self.assertEqual(len(consultations), 1)
+        self.assertEqual(consultations[0].id, consultation_id)
+        self.assertIsNone(consultations[0].ended_at)
+
+        started_events = (
+            await self.db.scalars(
+                select(AuditEvent).where(
+                    AuditEvent.target_id == consultation_id,
+                    AuditEvent.action == "consultation.started",
+                )
+            )
+        ).all()
+        self.assertEqual(len(started_events), 1)
+
+        ended = await self.client.post(
+            f"/api/v1/consultations/{consultation_id}/end",
+            json={"summary": "Synthetic duplicate prevention test."},
+        )
+        self.assertEqual(ended.status_code, 201, ended.text)
+
+        with self.assertRaises(HTTPException) as raised:
+            await require_doctor_grant(
+                self.db,
+                self.doctor,
+                self.patient.id,
+                None,
+                "prescriptions",
+                clinical_write=True,
+            )
+        self.assertEqual(raised.exception.status_code, 403)
+
+        ended_events = (
+            await self.db.scalars(
+                select(AuditEvent).where(
+                    AuditEvent.target_id == consultation_id,
+                    AuditEvent.action == "consultation.ended",
+                )
+            )
+        ).all()
+        self.assertEqual(len(ended_events), 1)

@@ -74,6 +74,13 @@ class ConsultationStartTests(IsolatedAsyncioTestCase):
         self.verified = self.enterContext(patch.object(service, "require_verified_professional"))
         self.membership = self.enterContext(patch.object(service, "require_verified_membership"))
         self.lock = self.enterContext(patch.object(service.repository, "lock_doctor_grant"))
+        self.active_consultation = self.enterContext(
+            patch.object(
+                service.repository,
+                "find_active_consultation_for_grant",
+                return_value=None,
+            )
+        )
         self.categories = self.enterContext(
             patch.object(
                 service.consent_repository,
@@ -239,6 +246,28 @@ class ConsultationStartTests(IsolatedAsyncioTestCase):
             await self.start()
 
         self.assertEqual(raised.exception.status_code, 403)
+        self.assert_no_write()
+
+    async def test_duplicate_active_consultation_is_rejected_without_writes(self):
+        self.active_consultation.return_value = Consultation(
+            id=uuid4(),
+            patient_user_id=self.patient.id,
+            doctor_user_id=self.doctor.id,
+            organization_id=None,
+            grant_id=self.grant.id,
+            started_at=self.now - timedelta(minutes=5),
+            ended_at=None,
+            summary=None,
+        )
+
+        with self.assertRaises(HTTPException) as raised:
+            await self.start()
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.active_consultation.assert_awaited_once_with(
+            self.db,
+            self.grant.id,
+        )
         self.assert_no_write()
 
 

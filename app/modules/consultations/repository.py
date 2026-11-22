@@ -231,3 +231,18 @@ async def list_doctor_queue(
     ]
 
     return items, int(total or 0)
+
+
+async def find_active_consultation_for_grant(
+    db: AsyncSession,
+    grant_id: UUID,
+) -> Consultation | None:
+    """Call only after locking the associated access grant."""
+    return await db.scalar(
+        select(Consultation)
+        .where(
+            Consultation.grant_id == grant_id,
+            Consultation.ended_at.is_(None),
+        )
+        .limit(1)
+    )

@@ -4,7 +4,7 @@ import os
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, skipUnless
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 from httpx import ASGITransport, AsyncClient
@@ -28,11 +28,47 @@ MFA = {"sign_in_second_factor": "phone"}
 
 class AccountSupportAuthTests(IsolatedAsyncioTestCase):
     async def test_unauthenticated_search_is_rejected_without_database(self):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get(USERS)
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.json()["code"], "AUTHENTICATION_REQUIRED")
+        session = AsyncMock()
+        session_context = MagicMock()
+        session_context.__aenter__ = AsyncMock(return_value=session)
+        session_context.__aexit__ = AsyncMock(return_value=False)
+        session_factory = MagicMock(return_value=session_context)
 
+        with (
+            patch.object(
+                app.state,
+                "audit_session_factory",
+                session_factory,
+                create=True,
+            ),
+            patch(
+                "app.modules.audit.service.append_event",
+                new_callable=AsyncMock,
+            ) as append_event,
+        ):
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+            ) as client:
+                response = await client.get(USERS)
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(
+            response.json()["code"],
+            "AUTHENTICATION_REQUIRED",
+        )
+        session_factory.assert_called_once_with()
+        append_event.assert_awaited_once()
+        self.assertIs(append_event.await_args.args[0], session)
+        self.assertEqual(
+            append_event.await_args.kwargs["action"],
+            "api.request",
+        )
+        self.assertEqual(
+            append_event.await_args.kwargs["outcome"],
+            "denied",
+        )
+        session.commit.assert_awaited_once()
 
 @skipUnless(TEST_DATABASE_URL, "Set ML35_TEST_DATABASE_URL to a dedicated migrated test database")
 class AccountSupportTests(IsolatedAsyncioTestCase):

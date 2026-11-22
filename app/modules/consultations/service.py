@@ -121,6 +121,17 @@ async def start_consultation(
     ):
         deny()
 
+    active_consultation = await repository.find_active_consultation_for_grant(
+        db,
+        grant.id,
+    )
+
+    if active_consultation is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="An active consultation already exists for this access grant.",
+        )
+
     consultation = Consultation(
         patient_user_id=grant.patient_user_id,
         doctor_user_id=actor.id,

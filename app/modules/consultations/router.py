@@ -88,12 +88,7 @@ DB = Annotated[AsyncSession, Depends(get_session)]
 Actor = Annotated[User, Depends(get_current_user)]
 
 
-@router.get(
-    "/me/patient-queue",
-    response_model=QueueEntryPage,
-    operation_id="medilink_023"
-
-)
+@router.get("/me/patient-queue", response_model=QueueEntryPage, operation_id="medilink_023")
 async def get_patient_queue(
     query: Annotated[ConsultationListQuery, Query()],
     db: DB,
@@ -103,10 +98,7 @@ async def get_patient_queue(
 
 
 @router.post(
-    "/consultations",
-    response_model=ConsultationsRead,
-    status_code=201,
-    operation_id="medilink_024"
+    "/consultations", response_model=ConsultationsRead, status_code=201, operation_id="medilink_024"
 )
 async def post_consultation(
     body: ConsultationInput,
@@ -125,7 +117,7 @@ async def post_consultation(
 @router.get(
     "/patients/{patient_id}/consultations",
     response_model=ConsultationsReadPage,
-    operation_id="medilink_025"
+    operation_id="medilink_025",
 )
 async def get_patient_consultations(
     patient_id: UUID,
@@ -145,7 +137,7 @@ async def get_patient_consultations(
     "/consultations/{consultation_id}/end",
     response_model=ConsultationsRead,
     status_code=201,
-    operation_id="medilink_026"
+    operation_id="medilink_026",
 )
 async def post_consultation_end(
     consultation_id: UUID,

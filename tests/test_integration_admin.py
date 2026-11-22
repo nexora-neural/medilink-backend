@@ -5,7 +5,7 @@ import os
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, skipUnless
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -34,11 +34,47 @@ SUBMISSIONS = "/api/v1/admin/integration-submissions"
 
 class IntegrationAdminAuthenticationTests(IsolatedAsyncioTestCase):
     async def test_missing_identity_is_rejected(self):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get(CLIENTS)
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.json()["code"], "AUTHENTICATION_REQUIRED")
+        session = AsyncMock()
+        session_context = MagicMock()
+        session_context.__aenter__ = AsyncMock(return_value=session)
+        session_context.__aexit__ = AsyncMock(return_value=False)
+        session_factory = MagicMock(return_value=session_context)
 
+        with (
+            patch.object(
+                app.state,
+                "audit_session_factory",
+                session_factory,
+                create=True,
+            ),
+            patch(
+                "app.modules.audit.service.append_event",
+                new_callable=AsyncMock,
+            ) as append_event,
+        ):
+            async with AsyncClient(
+                    transport=ASGITransport(app=app),
+                    base_url="http://test",
+            ) as client:
+                response = await client.get(CLIENTS)
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(
+            response.json()["code"],
+            "AUTHENTICATION_REQUIRED",
+        )
+        session_factory.assert_called_once_with()
+        append_event.assert_awaited_once()
+        self.assertIs(append_event.await_args.args[0], session)
+        self.assertEqual(
+            append_event.await_args.kwargs["action"],
+            "api.request",
+        )
+        self.assertEqual(
+            append_event.await_args.kwargs["outcome"],
+            "denied",
+        )
+        session.commit.assert_awaited_once()
     async def test_integration_key_requires_active_unexpired_write_scope(self):
         now = datetime.now(UTC)
         client = SimpleNamespace(
