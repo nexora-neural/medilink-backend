@@ -97,6 +97,7 @@ async def get_admin_medicines(
     response_model=MedicinesRead,
     status_code=status.HTTP_201_CREATED,
     summary="Add curated sample catalogue entry",
+    responses={409: {"description": "A sample medicine with these details already exists."}},
 )
 async def create_medicine(
     payload: MedicineInput,
