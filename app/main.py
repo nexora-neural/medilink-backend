@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
@@ -50,7 +50,7 @@ app.add_middleware(
     allow_origins=settings.cors_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allow_headers=["Accept", "Authorization", "Content-Type", "Idempotency-Key"],
+    allow_headers=["Accept", "Authorization", "Content-Type", "Idempotency-Key", "If-Match"],
     expose_headers=["X-Request-ID", "Retry-After"],
     max_age=600,
 )

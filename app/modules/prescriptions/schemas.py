@@ -1,7 +1,9 @@
-"""Pydantic request and response schemas for prescriptions and OCR workflow."""
+﻿"""Pydantic request and response schemas for prescriptions and OCR workflow."""
 
 
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import (
@@ -59,3 +61,99 @@ class MedicinesReadPage(BaseModel):
     page: int
     page_size: int
     total: int
+
+# ML-112 prescription draft editing schemas
+
+class PrescriptionItemInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    medicine_id: UUID | None = None
+    medicine_name_snapshot: str = Field(min_length=1, max_length=200)
+    dose_text: str = Field(min_length=1, max_length=200)
+    route: str | None = Field(default=None, max_length=100)
+    frequency: str = Field(min_length=1, max_length=200)
+    duration_days: int | None = Field(default=None, ge=1)
+    instructions: str | None = Field(default=None, max_length=2000)
+    quantity: Decimal | None = Field(default=None, gt=0)
+    quantity_unit: Literal["tablet", "capsule", "mL"] | None = None
+    is_prn: bool
+
+
+class PrescriptionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    consultation_id: UUID | None = None
+    claimed_prescriber: str | None = Field(default=None, max_length=200)
+    starts_on: date | None = None
+    ends_on: date | None = None
+    original_document_id: UUID | None = None
+    items: list[PrescriptionItemInput]
+
+
+class PrescriptionRecordRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    patient_user_id: UUID
+    consultation_id: UUID | None
+    prescriber_user_id: UUID | None
+    source: str
+    claimed_prescriber: str | None
+    review_status: str
+    reviewed_by: UUID | None
+    reviewed_at: datetime | None
+    status: str
+    issued_at: datetime | None
+    starts_on: date | None
+    ends_on: date | None
+    previous_prescription_id: UUID | None
+    original_document_id: UUID | None
+    created_by: UUID
+    created_at: datetime
+    updated_at: datetime
+    version: int
+    status_reason: str | None
+
+
+class PrescriptionItemRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    prescription_id: UUID
+    medicine_id: UUID | None
+    medicine_name_snapshot: str
+    dose_text: str
+    route: str | None
+    frequency: str
+    duration_days: int | None
+    instructions: str | None
+    quantity: Decimal | None
+    quantity_unit: str | None
+    is_prn: bool
+    created_at: datetime
+
+
+class PrescriptionReviewRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    prescription_id: UUID
+    reviewer_user_id: UUID
+    outcome: str
+    notes: str | None
+    reviewed_at: datetime
+
+
+class PrescriptionDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prescription: PrescriptionRecordRead
+    items: list[PrescriptionItemRead]
+    reviews: list[PrescriptionReviewRead]
+
+
+class ClinicalWriteErrorResponse(BaseModel):
+    code: str
+    message: str
+    field_errors: dict[str, list[str]]
+    request_id: str
