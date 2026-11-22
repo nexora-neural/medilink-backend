@@ -1,4 +1,4 @@
-﻿"""API router for medication schedules and adherence."""
+"""API router for medication schedules and adherence."""
 
 from typing import Annotated
 from uuid import UUID
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.session import get_session
 from app.modules.identity.auth import get_current_user
+from app.modules.identity.authorization import require_role
 from app.modules.identity.models import User
 from app.modules.medication.schemas import ScheduleDetail, ScheduleInput
 from app.modules.medication.service import (
@@ -65,6 +66,9 @@ async def replace_medication_schedule(
         )
 
     try:
+        # Require an active account with a non-revoked Patient role.
+        await require_role(session, current_user, "patient")
+
         schedule, times = await replace_schedule(
             session,
             schedule_id=schedule_id,
