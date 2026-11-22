@@ -17128,6 +17128,14 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          "applicant_display_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "organization_name": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -17163,6 +17171,10 @@
           "decided_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "reviewer_display_name": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
