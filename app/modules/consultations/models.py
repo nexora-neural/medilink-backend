@@ -1,4 +1,3 @@
-
 """SQLAlchemy ORM model for consultations."""
 
 import uuid
