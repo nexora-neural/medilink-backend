@@ -4,22 +4,29 @@ These tests need no running PostgreSQL or Firebase account. They exercise the
 real FastAPI route and Pydantic schema while overriding external dependencies.
 """
 
+import os
 from types import SimpleNamespace
-from unittest import IsolatedAsyncioTestCase, TestCase
+from unittest import IsolatedAsyncioTestCase, TestCase, skipUnless
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.database.session import get_session
 from app.main import app
 from app.modules.identity.auth import get_verified_identity
+from app.modules.identity.models import Role, User, UserRole
 from app.modules.identity.request_limits import require_authenticated_rate_limit
+from app.modules.profiles.models import ProfessionalProfile
 from app.modules.profiles.schemas import OnboardRequest
 from app.modules.profiles.service import onboard_identity
 
 ONBOARD = "/api/v1/me/onboard"
+POSTGRES_TEST_URL = os.getenv("ML61_PROFESSIONAL_TEST_DATABASE_URL")
 
 
 class PublicRoleSchemaTests(TestCase):
@@ -191,3 +198,68 @@ class ProfessionalOnboardingSecurityTests(IsolatedAsyncioTestCase):
                     created_profile.verification_status,
                     "not_submitted",
                 )
+
+
+@skipUnless(
+    POSTGRES_TEST_URL,
+    "Set ML61_PROFESSIONAL_TEST_DATABASE_URL to a dedicated migrated test database",
+)
+class ProfessionalOnboardingPostgreSQLTests(IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.engine = create_async_engine(POSTGRES_TEST_URL)
+        self.addAsyncCleanup(self.engine.dispose)
+        self.connection = await self.engine.connect()
+        self.addAsyncCleanup(self.connection.close)
+        self.transaction = await self.connection.begin()
+        self.addAsyncCleanup(self.transaction.rollback)
+        self.session = AsyncSession(
+            bind=self.connection,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
+        )
+        self.addAsyncCleanup(self.session.close)
+        self.uid = f"ml50-professional-{uuid4()}"
+        role = await self.session.scalar(select(Role).where(Role.code == "doctor"))
+        if role is None:
+            self.session.add(Role(code="doctor", label="Doctor"))
+            await self.session.flush()
+
+        async def session_override():
+            yield self.session
+
+        async def identity_override():
+            return {"uid": self.uid, "email": f"{self.uid}@example.invalid"}
+
+        async def rate_limit_override():
+            return None
+
+        overrides = patch.dict(
+            app.dependency_overrides,
+            {
+                get_session: session_override,
+                get_verified_identity: identity_override,
+                require_authenticated_rate_limit: rate_limit_override,
+            },
+        )
+        overrides.start()
+        self.addCleanup(overrides.stop)
+        self.client = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+        self.addAsyncCleanup(self.client.aclose)
+
+    async def test_professional_signup_persists_profile_without_professional_role(self):
+        response = await self.client.post(
+            ONBOARD,
+            json={"display_name": "Synthetic pending applicant", "requested_role": "doctor"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["roles"], [])
+        user = await self.session.scalar(select(User).where(User.firebase_uid == self.uid))
+        self.assertIsNotNone(user)
+        profile = await self.session.get(ProfessionalProfile, user.id)
+        self.assertIsNotNone(profile)
+        self.assertEqual(profile.role, "doctor")
+        self.assertEqual(profile.verification_status, "not_submitted")
+        assignments = await self.session.scalars(
+            select(UserRole).where(UserRole.user_id == user.id)
+        )
+        self.assertEqual(assignments.all(), [])

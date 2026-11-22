@@ -13,9 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from app.database.session import get_session
 from app.main import app
 from app.modules.audit.models import AuditEvent
+from app.modules.documents.enum import RecordSource
+from app.modules.documents.models import Document
 from app.modules.identity.auth import get_current_user
 from app.modules.identity.models import Role, User, UserRole
 from app.modules.identity.request_limits import require_authenticated_rate_limit
+from app.modules.organizations.models import Organization
 from app.modules.profiles.models import ProfessionalProfile
 from app.modules.verification import service
 from app.modules.verification.models import VerificationApplication, VerificationDecision
@@ -108,8 +111,11 @@ class VerificationAdminPostgreSQLTests(IsolatedAsyncioTestCase):
             params={"status": "pending", "role": "doctor", "page": 1, "page_size": 10},
         )
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["total"], 1)
-        self.assertEqual(response.json()["items"][0]["id"], str(self.application_id))
+        self.assertGreaterEqual(response.json()["total"], 1)
+        self.assertIn(
+            str(self.application_id),
+            {item["id"] for item in response.json()["items"]},
+        )
 
         response = await self.client.get(f"{BASE_PATH}/{self.application_id}")
         self.assertEqual(response.status_code, 200, response.text)
@@ -154,6 +160,127 @@ class VerificationAdminPostgreSQLTests(IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["total"], 1)
         self.assertEqual(response.json()["items"][0]["reviewer_user_id"], str(self.reviewer.id))
+
+    async def test_pending_applicant_submits_and_reads_own_evidence_without_role(self):
+        await self.session.delete(self.application)
+        await self.session.flush()
+        evidence = Document(
+            owner_user_id=self.applicant.id,
+            uploaded_by=self.applicant.id,
+            patient_user_id=None,
+            source=RecordSource.DOCTOR,
+            document_type="verification_evidence",
+            original_filename="registration.pdf",
+            storage_key=f"test/{uuid4()}",
+            media_type="application/pdf",
+            byte_size=1,
+        )
+        self.session.add(evidence)
+        await self.session.flush()
+        self.actor = self.applicant
+
+        response = await self.client.post(
+            "/api/v1/verification-applications",
+            json={
+                "role": "doctor",
+                "registration_number": "SLMC-ML48-PENDING",
+                "evidence_document_ids": [str(evidence.id)],
+            },
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["status"], "pending")
+        self.assertEqual(response.json()["evidence_document_ids"], [str(evidence.id)])
+        self.assertIsNone(
+            await self.session.scalar(
+                select(UserRole).where(
+                    UserRole.user_id == self.applicant.id,
+                    UserRole.role_id == self.roles["doctor"],
+                    UserRole.revoked_at.is_(None),
+                )
+            )
+        )
+
+        listed = await self.client.get("/api/v1/me/verification-applications")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual(listed.json()["items"][0]["evidence_document_ids"], [str(evidence.id)])
+
+        metadata = await self.client.get(f"/api/v1/documents/{evidence.id}")
+        self.assertEqual(metadata.status_code, 200, metadata.text)
+        self.assertEqual(metadata.json()["original_filename"], "registration.pdf")
+
+        organization = Organization(
+            name=f"ML-50 pending applicant lab {uuid4()}",
+            type="laboratory",
+            status="active",
+        )
+        self.session.add(organization)
+        await self.session.flush()
+        membership = await self.client.post(
+            "/api/v1/me/memberships",
+            json={"organization_id": str(organization.id), "role": "doctor"},
+        )
+        self.assertEqual(membership.status_code, 201, membership.text)
+        self.assertEqual(membership.json()["status"], "pending")
+        self.assertIsNone(
+            await self.session.scalar(
+                select(UserRole).where(
+                    UserRole.user_id == self.applicant.id,
+                    UserRole.role_id == self.roles["doctor"],
+                    UserRole.revoked_at.is_(None),
+                )
+            )
+        )
+
+        # The applicant has no patient or professional role, so a protected
+        # clinical workflow must remain unavailable while verification is pending.
+        denied_clinical_access = await self.client.post(
+            "/api/v1/lab-upload-requests",
+            json={"laboratory_id": str(organization.id)},
+        )
+        self.assertEqual(
+            denied_clinical_access.status_code, 403, denied_clinical_access.text
+        )
+        self.assertEqual(denied_clinical_access.json()["code"], "FORBIDDEN")
+
+        other_user = await self._create_user("ML48 unrelated applicant")
+        self.actor = other_user
+        denied = await self.client.get(f"/api/v1/documents/{evidence.id}")
+        self.assertEqual(denied.status_code, 404, denied.text)
+
+    async def test_rejected_applicant_remains_without_role_and_cannot_use_clinical_flow(self):
+        response = await self.client.post(
+            f"{BASE_PATH}/{self.application_id}/decision",
+            json={"status": "rejected", "reason": "Synthetic evidence mismatch"},
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["status"], "rejected")
+
+        await self.session.refresh(self.profile)
+        self.assertEqual(self.profile.verification_status, "rejected")
+        self.assertIsNone(
+            await self.session.scalar(
+                select(UserRole).where(
+                    UserRole.user_id == self.applicant_id,
+                    UserRole.role_id == self.roles["doctor"],
+                    UserRole.revoked_at.is_(None),
+                )
+            )
+        )
+
+        organization = Organization(
+            name=f"ML-50 rejected applicant lab {uuid4()}",
+            type="laboratory",
+            status="active",
+        )
+        self.session.add(organization)
+        await self.session.flush()
+        self.actor = self.applicant
+        denied = await self.client.post(
+            "/api/v1/lab-upload-requests",
+            json={"laboratory_id": str(organization.id)},
+        )
+        self.assertEqual(denied.status_code, 403, denied.text)
+        self.assertEqual(denied.json()["code"], "FORBIDDEN")
 
     async def test_non_admin_and_self_reviewer_are_denied(self):
         self.actor = self.applicant

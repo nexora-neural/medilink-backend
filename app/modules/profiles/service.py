@@ -28,7 +28,6 @@ from app.modules.profiles.schemas import (
 )
 
 
-
 async def onboard_identity(session: AsyncSession, identity: dict, data: OnboardRequest):
     """Reconcile by verified Firebase UID without merging accounts by email."""
 
