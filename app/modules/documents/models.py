@@ -86,6 +86,14 @@ class Document(Base):
         nullable=False,
     )
 
+    staged_report_request_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey(
+            "lab_upload_requests.id", name="fk_documents_staged_report_request",
+            ondelete="RESTRICT",
+        ),
+    )
+
     original_filename: Mapped[str] = mapped_column(
         Text,
         nullable=False,
