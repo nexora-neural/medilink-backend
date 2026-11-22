@@ -7,7 +7,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.database.session import get_session
@@ -51,6 +51,7 @@ class MedicineCatalogueTests(IsolatedAsyncioTestCase):
             return self.actor
 
         async def verified_identity_override():
+            await self.session.refresh(self.actor)
             return {"uid": self.actor.firebase_uid}
 
         counter_engine = patch("app.core.rate_limits.engine", self.engine)
@@ -142,3 +143,69 @@ class MedicineCatalogueTests(IsolatedAsyncioTestCase):
         self.assertIsNotNone(saved)
         self.assertTrue(saved["is_sample"])
         self.assertEqual({field: saved[field] for field in payload}, payload)
+
+    async def test_duplicate_create_returns_conflict_and_search_finds_one_medicine(self):
+        path = "/api/v1/admin/medicines"
+        payload = {
+            "generic_name": "QA Paracetamol",
+            "brand_name": "QA Relief",
+            "strength": "500 mg",
+            "form": "tablet",
+        }
+
+        self.actor = self.users["super_admin"]
+        created = await self.client.post(path, json=payload)
+        self.assertEqual(created.status_code, 201, created.text)
+        medicine_id = created.json()["id"]
+
+        case_variant = {field: f" {value.upper()} " for field, value in payload.items()}
+        for duplicate in (payload, case_variant):
+            response = await self.client.post(path, json=duplicate)
+            self.assertEqual(response.status_code, 409, response.text)
+            self.assertEqual(response.json()["code"], "MEDICINE_ALREADY_EXISTS")
+            self.assertEqual(response.json()["request_id"], response.headers["X-Request-ID"])
+
+        self.actor = self.users["patient"]
+        for query in payload.values():
+            response = await self.client.get("/api/v1/medicines", params={"q": query})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["total"], 1)
+            self.assertEqual([item["id"] for item in response.json()["items"]], [medicine_id])
+
+        audit_count = await self.session.scalar(
+            select(func.count()).select_from(AuditEvent).where(
+                AuditEvent.target_id == medicine_id,
+                AuditEvent.action == "medicine.created",
+            )
+        )
+        self.assertEqual(audit_count, 1)
+
+        self.actor = self.users["super_admin"]
+        for field, value in {
+            "generic_name": "QA Ibuprofen",
+            "brand_name": "QA Relief Extra",
+            "strength": "250 mg",
+            "form": "capsule",
+        }.items():
+            with self.subTest(field=field):
+                response = await self.client.post(path, json={**payload, field: value})
+                self.assertEqual(response.status_code, 201, response.text)
+
+    async def test_duplicate_create_matches_missing_optional_fields_in_sample_catalogue(self):
+        path = "/api/v1/admin/medicines"
+        self.session.add(Medicine(generic_name="QA Existing", is_sample=False))
+        await self.session.flush()
+        self.actor = self.users["super_admin"]
+
+        created = await self.client.post(path, json={"generic_name": "QA Existing"})
+        self.assertEqual(created.status_code, 201, created.text)
+        duplicate = await self.client.post(
+            path,
+            json={
+                "generic_name": "QA Existing",
+                "brand_name": None,
+                "strength": None,
+                "form": None,
+            },
+        )
+        self.assertEqual(duplicate.status_code, 409, duplicate.text)

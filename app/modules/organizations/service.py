@@ -140,10 +140,18 @@ async def request_membership(
     if user.status != "active":
         raise _error(request, 403, "ACCOUNT_INACTIVE", "An active account is required.")
     profile = await session.get(ProfessionalProfile, user.id)
+    assigned_role = await _has_role(session, user.id, payload.role)
+    pending_applicant = (
+        profile is not None
+        and profile.role == payload.role
+        and profile.verification_status
+        in {"not_submitted", "pending", "rejected", "more_info_requested"}
+        and not assigned_role
+    )
     if (
         profile is None
         or profile.role != payload.role
-        or not await _has_role(session, user.id, payload.role)
+        or (not assigned_role and not pending_applicant)
     ):
         raise _error(
             request,

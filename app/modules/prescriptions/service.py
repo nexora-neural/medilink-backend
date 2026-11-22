@@ -178,6 +178,16 @@ async def add_medicine(
             session=session,
             payload=payload,
         )
+        if medicine is None:
+            raise AuthenticationError(
+                status_code=409,
+                detail={
+                    "code": "MEDICINE_ALREADY_EXISTS",
+                    "message": "A sample medicine with these details already exists.",
+                    "field_errors": {},
+                    "request_id": request.state.request_id,
+                },
+            )
 
         await append_event(
             session,

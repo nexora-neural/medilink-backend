@@ -45,8 +45,29 @@ async def get_medicines(
 async def create_medicine(
     session: AsyncSession,
     payload: MedicineInput,
-) -> Medicine:
-    """Insert a sample medicine without committing."""
+) -> Medicine | None:
+    """Insert a sample medicine unless its identifying fields already exist."""
+
+    # Catalogue writers share a transaction lock so the duplicate check sees
+    # the previous writer's committed row, even across application workers.
+    await session.execute(select(func.pg_advisory_xact_lock(717, 262)))
+    duplicate = await session.scalar(
+        select(Medicine.id)
+        .where(
+            Medicine.is_sample.is_(True),
+            func.lower(func.btrim(Medicine.generic_name)) == func.lower(payload.generic_name),
+            func.lower(func.btrim(Medicine.brand_name)).is_not_distinct_from(
+                func.lower(payload.brand_name)
+            ),
+            func.lower(func.btrim(Medicine.strength)).is_not_distinct_from(
+                func.lower(payload.strength)
+            ),
+            func.lower(func.btrim(Medicine.form)).is_not_distinct_from(func.lower(payload.form)),
+        )
+        .limit(1)
+    )
+    if duplicate is not None:
+        return None
 
     medicine = Medicine(
         generic_name=payload.generic_name,
