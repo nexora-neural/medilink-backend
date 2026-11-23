@@ -22,7 +22,14 @@ async def page_rows(db, model, filters, page, page_size, time_column):
 
 
 async def operational_counts(db):
-    # One statement gives counts and backup evidence one consistent snapshot.
+    # Use the same failed-job definition as the filtered jobs list.
+    pending_retry = exists(
+        select(JobRetryRequest.id).where(
+            JobRetryRequest.job_id == JobRun.id,
+            JobRetryRequest.status.in_({"queued", "running"}),
+        )
+    )
+
     stmt = select(
         select(func.count())
         .select_from(VerificationApplication)
@@ -32,7 +39,13 @@ async def operational_counts(db):
         .select_from(Organization)
         .where(Organization.status == "active")
         .scalar_subquery(),
-        select(func.count()).select_from(JobRun).where(JobRun.status == "failed").scalar_subquery(),
+        select(func.count())
+        .select_from(JobRun)
+        .where(
+            JobRun.status == "failed",
+            ~pending_retry,
+        )
+        .scalar_subquery(),
         select(func.max(BackupRun.finished_at))
         .where(
             BackupRun.status == "succeeded",
@@ -41,10 +54,17 @@ async def operational_counts(db):
         )
         .scalar_subquery(),
     )
+
     row = (await db.execute(stmt)).one()
+
     return dict(
         zip(
-            ("pending_verifications", "active_organizations", "failed_jobs", "last_backup_at"),
+            (
+                "pending_verifications",
+                "active_organizations",
+                "failed_jobs",
+                "last_backup_at",
+            ),
             row,
             strict=True,
         )

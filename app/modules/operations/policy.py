@@ -46,7 +46,16 @@ PATIENT_TARGETS = (
     ("measurement", Measurement, {"measurement.created", "measurement.corrected"}),
     ("medication_schedule", MedicationSchedule, {"medication_schedule.replaced"}),
     ("prescriptions", Prescription, {"prescription.draft.updated"}),
-    ("report", Report, {"report.created", "report.corrected", "report.read"}),
+    (
+        "report",
+        Report,
+        {
+            "report.created",
+            "report.published",
+            "report.corrected",
+            "report.read",
+        },
+    ),
     ("vaccination", Vaccination, {"vaccination.created", "vaccination.corrected"}),
     ("condition", ConditionsModel, {"condition.created", "condition.corrected"}),
     ("diagnosis", DiagnosesModel, {"diagnosis.created", "diagnosis.corrected"}),
