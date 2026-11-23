@@ -638,3 +638,14 @@ class DemoSeedPostgresTests(IsolatedAsyncioTestCase):
             self.assertNotEqual(process.returncode, 0)
             self.assertIn(b"test account", stderr)
             self.assertEqual(list(Path(directory).iterdir()), [])
+
+    async def test_rejects_existing_clinical_record_with_other_author(self):
+        await seed(self.connection, datetime.now(UTC))
+        conditions = Base.metadata.tables["conditions"]
+        await self.connection.execute(
+            update(conditions)
+            .where(conditions.c.id == demo_id("condition"))
+            .values(recorded_by=sample_id("user", "patient"))
+        )
+        with self.assertRaisesRegex(RuntimeError, "conditions identity collision"):
+            await seed(self.connection, datetime.now(UTC))

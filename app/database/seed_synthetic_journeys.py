@@ -51,6 +51,7 @@ async def seed(
                 existing[k] != v
                 for k, v in values.items()
                 if k.endswith("_id")
+                or bool(table.c[k].foreign_keys)
                 or (table_name == "documents" and k in identity_fields)
                 or (table_name == "users" and k == "firebase_uid")
             ):
