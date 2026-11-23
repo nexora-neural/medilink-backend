@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,9 +71,23 @@ async def get_jobs(
 
 
 @router.post("/admin/jobs/{job_id}/retry", response_model=JobStatus, status_code=202)
-async def post_retry(job_id: UUID, payload: ReasonInput, request: Request, db: DB, actor: Actor):
+async def post_retry(
+    job_id: UUID,
+    payload: ReasonInput,
+    request: Request,
+    db: DB,
+    actor: Actor,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
+):
     queries(request, set())
-    return await service.retry(db, actor, job_id, payload.reason, request.state.request_id)
+    return await service.retry(
+        db,
+        actor,
+        job_id,
+        payload.reason,
+        request.state.request_id,
+        idempotency_key=idempotency_key,
+    )
 
 
 @router.get("/admin/audit-events", response_model=AuditEventsReadPage)

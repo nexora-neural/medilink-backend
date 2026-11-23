@@ -2213,3 +2213,12 @@ Lock the original, check ownership, source and active status, then atomically in
 - Only already-recorded business/access events are returned. Add target-specific read events to future clinical routes as those routes are implemented; do not infer target ownership from raw request paths.
 - Backups API reads existing evidence. It does not create backups, encrypt backup files, run a backup schedule, or perform restore checks; those producers must populate backup_runs and call record_backup_run.
 - Paginated lists use page >= 1, page_size 1..100, created timestamp/id descending (backup start timestamp/id). Unknown query/body fields rejected. Audit from is inclusive; to exclusive; timezone required. Protected responses use no-store.
+
+
+### ML-67 PR #62 retry replay and job-list snapshot fixes
+
+- POST /api/v1/admin/jobs/{job_id}/retry now requires Idempotency-Key (8..128 characters). Reuse a key for a replay of the same normalized reason; use a new key for a genuinely new retry request.
+- The existing api_idempotency_records table stores the original 202 response in the same transaction as queue scheduling and its audit event. A replay after worker failure or success returns that original response and does not create another request, audit event or attempt. GET /admin/jobs reports the current execution state.
+- Keys are scoped to the user, operation and job. A key used with a different normalized reason returns 409 IDEMPOTENCY_CONFLICT. Current administrative authorization is checked before replay. No new database table or migration is needed.
+- GET /api/v1/admin/jobs derives effective status, status filtering, pagination total and returned fields in one SQL statement. A retry committed after that SELECT cannot rewrite a returned failed row as pending. A subsequent request observes the newer state.
+- Regression coverage includes replay after a failed worker, intentional new retries up to the existing three-attempt limit, key/payload conflicts, a deterministic query/serialization interleaving, header validation and out-of-range pages.

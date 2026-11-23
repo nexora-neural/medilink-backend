@@ -6,6 +6,13 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy import select
 
+from app.core.idempotency import (
+    IdempotencyConflict,
+    IdempotencyScope,
+    lock_and_replay,
+    request_digest,
+    save_success,
+)
 from app.modules.audit.service import append_event
 from app.modules.identity.authorization import require_role
 from app.modules.identity.models import User
@@ -72,7 +79,7 @@ async def jobs(db, actor, page, page_size, status):
     await require_admin(db, actor)
     rows, total = await repo.job_page(db, page, page_size, status)
     return JobStatusPage(
-        items=[job_read(row, await repo.open_retry(db, row.id)) for row in rows],
+        items=[JobStatus(**{**row, "error_code": safe_error(row["error_code"])}) for row in rows],
         page=page,
         page_size=page_size,
         total=total,
@@ -167,50 +174,82 @@ async def backups(db, actor, page, page_size):
     )
 
 
-async def retry(db, actor, job_id: UUID, reason, request_id):
+async def retry(db, actor, job_id: UUID, reason, request_id, *, idempotency_key):
+    # Authorization is always current, including for saved-response replay.
     await require_admin(db, actor)
+    scope = IdempotencyScope(
+        "user",
+        actor.id,
+        "retryOperationJob",
+        str(job_id),
+        idempotency_key,
+    )
+    digest = request_digest({"reason": reason})
     try:
+        try:
+            previous = await lock_and_replay(db, scope, digest, repo.fetch_one)
+        except IdempotencyConflict:
+            raise HTTPException(
+                409,
+                {
+                    "code": "IDEMPOTENCY_CONFLICT",
+                    "message": "This key was used with a different retry request.",
+                    "field_errors": {},
+                    "request_id": request_id,
+                },
+            ) from None
+
+        if previous is not None:
+            # Replay the original accepted response even after worker completion.
+            # Never enqueue, consume an attempt, or emit a second business event.
+            response = JobStatus.model_validate(previous["response_body"])
+            await db.commit()
+            return response
+
         job = await repo.lock_job(db, job_id)
         if job is None:
             raise HTTPException(404, "Job not found.")
         existing = await repo.open_retry(db, job_id)
         if existing is not None:
-            # State-idempotence: concurrent/repeated submissions cannot enqueue twice.
             if existing.requested_by != actor.id:
                 raise HTTPException(409, "A retry is already scheduled.")
-            return job_read(job, existing)
-        if job.status != "failed":
-            raise HTTPException(409, "Only a failed job can be retried.")
-        handler = HANDLERS.get(job.job_type)
-        if handler is None:
-            raise HTTPException(409, "This job type does not support safe retries.")
-        if job.attempt_count >= handler.max_attempts:
-            raise HTTPException(409, "Retry limit reached.")
-        if not await handler.authorize(db, job, actor.id):
-            raise HTTPException(403, "Job retry permission denied.")
-        item = JobRetryRequest(
-            job_id=job.id,
-            requested_by=actor.id,
-            reason=reason,
-            request_id=request_id,
-            attempt_number=job.attempt_count + 1,
-            status="queued",
-            created_at=datetime.now(UTC),
-        )
-        db.add(item)
-        # Keep the previous job status/error/timestamps intact until an actual attempt.
-        await append_event(
-            db,
-            actor_user_id=actor.id,
-            action="job.retry.requested",
-            target_type="job_run",
-            target_id=job.id,
-            outcome="success",
-            request_id=request_id,
-            metadata={"job_type": job.job_type, "attempt_count": job.attempt_count},
-        )
+            response = job_read(job, existing)
+        else:
+            if job.status != "failed":
+                raise HTTPException(409, "Only a failed job can be retried.")
+            handler = HANDLERS.get(job.job_type)
+            if handler is None:
+                raise HTTPException(409, "This job type does not support safe retries.")
+            if job.attempt_count >= handler.max_attempts:
+                raise HTTPException(409, "Retry limit reached.")
+            if not await handler.authorize(db, job, actor.id):
+                raise HTTPException(403, "Job retry permission denied.")
+            item = JobRetryRequest(
+                job_id=job.id,
+                requested_by=actor.id,
+                reason=reason,
+                request_id=request_id,
+                attempt_number=job.attempt_count + 1,
+                status="queued",
+                created_at=datetime.now(UTC),
+            )
+            db.add(item)
+            await append_event(
+                db,
+                actor_user_id=actor.id,
+                action="job.retry.requested",
+                target_type="job_run",
+                target_id=job.id,
+                outcome="success",
+                request_id=request_id,
+                metadata={"job_type": job.job_type, "attempt_count": job.attempt_count},
+            )
+            response = job_read(job, item)
+
+        # Scheduling, its audit and the original 202 response commit atomically.
+        await save_success(db, scope, digest, 202, response.model_dump(mode="json"))
         await db.commit()
-        return job_read(job, item)
+        return response
     except Exception:
         await db.rollback()
         raise

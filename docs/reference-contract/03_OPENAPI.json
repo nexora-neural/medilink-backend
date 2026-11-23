@@ -14444,7 +14444,7 @@
           "Administration"
         ],
         "summary": "View failed/background jobs",
-        "description": "Allowed actor: Admin or Super Admin: delegated administrative permissions. Requires job_runs persistence; no stack traces/secrets.",
+        "description": "Allowed actor: Admin or Super Admin: delegated administrative permissions. Requires job_runs persistence; no stack traces/secrets. Effective status, filtering, total and response fields are derived from a single SQL statement snapshot; no later per-job retry lookup can change the returned status.",
         "security": [
           {
             "FirebaseBearer": []
@@ -14588,7 +14588,7 @@
           "Administration"
         ],
         "summary": "Request bounded retry",
-        "description": "Allowed actor: Admin or Super Admin: delegated administrative permissions. Only retryable failed job, idempotent scheduling and current permissions/state rechecked by worker. ML-67: persistent retry request, registered handlers only; three total attempts including the initial attempt. Queued retry projects as pending. No handler import paths are accepted from database rows.",
+        "description": "Allowed actor: Admin or Super Admin: delegated administrative permissions. Only retryable failed job, idempotent scheduling and current permissions/state rechecked by worker. ML-67: persistent retry request, registered handlers only; three total attempts including the initial attempt. Queued retry projects as pending. No handler import paths are accepted from database rows. Required Idempotency-Key, scoped by actor, operation and job. Same key and reason returns the original 202 response even after worker failure or success, without scheduling again. Reusing a key with a different normalized reason returns 409 IDEMPOTENCY_CONFLICT. Replay still requires current administrative authorization.",
         "security": [
           {
             "FirebaseBearer": []
@@ -14695,6 +14695,17 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Use the same key and normalized reason for replays, including after worker completion. Use a new key for a genuinely new retry request.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
             }
           }
         ],

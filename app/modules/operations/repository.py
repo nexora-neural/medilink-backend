@@ -1,6 +1,6 @@
 """SQL for deterministic, authorization-filtered pages."""
 
-from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy import and_, case, exists, func, select, text, true
 
 from app.modules.audit.models import AuditEvent, BackupRun, JobRun
 from app.modules.operations.models import JobRetryRequest
@@ -72,18 +72,68 @@ async def operational_counts(db):
 
 
 async def job_page(db, page, page_size, status):
-    pending = exists(
-        select(JobRetryRequest.id).where(
-            JobRetryRequest.job_id == JobRun.id, JobRetryRequest.status.in_({"queued", "running"})
+    # A single SQL statement derives, filters and projects the effective status.
+    # The partial unique index guarantees at most one open request per job.
+    open_requests = (
+        select(
+            JobRetryRequest.job_id,
+            JobRetryRequest.created_at.label("retry_created_at"),
         )
+        .where(JobRetryRequest.status.in_({"queued", "running"}))
+        .subquery("open_requests")
     )
-    if status == "pending":
-        filters = [or_(JobRun.status == "queued", and_(JobRun.status == "failed", pending))]
-    elif status == "failed":
-        filters = [JobRun.status == "failed", ~pending]
-    else:
-        filters = [JobRun.status == status] if status else []
-    return await page_rows(db, JobRun, filters, page, page_size, JobRun.created_at)
+
+    effective_status = case(
+        (JobRun.status == "queued", "pending"),
+        (and_(JobRun.status == "failed", open_requests.c.job_id.is_not(None)), "pending"),
+        else_=JobRun.status,
+    )
+    snapshot = (
+        select(
+            JobRun.id,
+            JobRun.job_type,
+            effective_status.label("status"),
+            JobRun.attempt_count,
+            JobRun.last_error_code.label("error_code"),
+            func.greatest(
+                JobRun.created_at,
+                JobRun.started_at,
+                JobRun.finished_at,
+                open_requests.c.retry_created_at,
+            ).label("updated_at"),
+            JobRun.created_at.label("created_at"),
+        )
+        .outerjoin(open_requests, open_requests.c.job_id == JobRun.id)
+        .subquery("job_snapshot")
+    )
+
+    filtered_query = select(snapshot)
+    if status is not None:
+        filtered_query = filtered_query.where(snapshot.c.status == status)
+    filtered = filtered_query.cte("filtered_jobs")
+    totals = select(func.count().label("total")).select_from(filtered).cte("job_totals")
+    paged = (
+        select(filtered)
+        .order_by(
+            filtered.c.created_at.desc(),
+            filtered.c.id.desc(),
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .cte("paged_jobs")
+    )
+
+    # Keep total available even when the page is empty/out of range.
+    stmt = (
+        select(*paged.c, totals.c.total)
+        .select_from(totals.outerjoin(paged, true()))
+        .order_by(paged.c.created_at.desc(), paged.c.id.desc())
+    )
+    result = (await db.execute(stmt)).mappings().all()
+    total = result[0]["total"]
+    fields = ("id", "job_type", "status", "attempt_count", "error_code", "updated_at")
+    rows = [{field: row[field] for field in fields} for row in result if row["id"] is not None]
+    return rows, total
 
 
 async def audit_page(db, roles, page, page_size, action, start, end, request_id):
@@ -119,3 +169,8 @@ async def open_retry(db, job_id):
             JobRetryRequest.job_id == job_id, JobRetryRequest.status.in_({"queued", "running"})
         )
     )
+
+
+async def fetch_one(db, sql, **params):
+    """Adapter for the existing transactional idempotency helper."""
+    return (await db.execute(text(sql), params)).mappings().one_or_none()

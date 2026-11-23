@@ -11,6 +11,7 @@ Existing application schemas and rows are not modified.
 import os
 import unittest
 from datetime import UTC, date, datetime
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -32,6 +33,7 @@ from app.modules.audit.service import append_event
 from app.modules.identity.models import Role, User, UserRole
 from app.modules.measurements.models import Measurement
 from app.modules.operations import service
+from app.modules.operations.jobs import HANDLERS, RetryHandler
 from app.modules.operations.models import JobRetryRequest
 from app.modules.profiles.models import PatientProfile
 
@@ -62,10 +64,8 @@ def create_test_tables(connection):
 
         return expression
 
-    # Change only copied test definitions, not application metadata.
     for table in test_metadata.sorted_tables:
         for column in table.columns:
-            # Identity columns also have a server_default, but no .arg.
             if isinstance(column.server_default, DefaultClause):
                 original = str(column.server_default.arg)
                 corrected = local_enum_casts(original)
@@ -83,8 +83,6 @@ def create_test_tables(connection):
                 if corrected != original:
                     constraint.sqltext = text(corrected)
 
-    # These enums are normally created by migrations.
-    # Explicitly create them inside the private test schema.
     for table in test_metadata.sorted_tables:
         for column in table.columns:
             enum_type = column.type
@@ -119,7 +117,6 @@ class OperationsPostgresTests(unittest.IsolatedAsyncioTestCase):
 
         schema = "ml67_test_" + uuid4().hex
 
-        # This identifier is generated locally, not supplied by a user.
         await self.connection.execute(
             text(f'CREATE SCHEMA "{schema}"')
         )
@@ -240,8 +237,6 @@ class OperationsPostgresTests(unittest.IsolatedAsyncioTestCase):
                 row.id,
             )
 
-        # A privileged event must not become patient activity merely
-        # because the patient is its actor.
         await self.event(
             "account.super_admin.bootstrapped",
             "users",
@@ -331,6 +326,7 @@ class OperationsPostgresTests(unittest.IsolatedAsyncioTestCase):
             job.id,
             "Synthetic recovery reason",
             str(uuid4()),
+            idempotency_key=str(uuid4()),
         )
         two = await service.retry(
             self.db,
@@ -338,6 +334,7 @@ class OperationsPostgresTests(unittest.IsolatedAsyncioTestCase):
             job.id,
             "Repeat submission",
             str(uuid4()),
+            idempotency_key=str(uuid4()),
         )
 
         self.assertEqual(one.status, "pending")
@@ -350,7 +347,6 @@ class OperationsPostgresTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(await service.worker_once(self.db))
-
         await self.db.refresh(job)
 
         self.assertEqual(job.status, "succeeded")
@@ -379,6 +375,7 @@ class OperationsPostgresTests(unittest.IsolatedAsyncioTestCase):
             job.id,
             "Recovery",
             str(uuid4()),
+            idempotency_key=str(uuid4()),
         )
 
         role = await self.db.scalar(
@@ -412,12 +409,12 @@ class OperationsPostgresTests(unittest.IsolatedAsyncioTestCase):
                 job.id,
                 "Recovery",
                 str(uuid4()),
+                idempotency_key=str(uuid4()),
             )
 
         self.assertEqual(ctx.exception.status_code, 409)
 
         await self.db.refresh(self.admin)
-
         self.admin.status = "suspended"
         await self.db.commit()
 
@@ -478,3 +475,239 @@ class OperationsPostgresTests(unittest.IsolatedAsyncioTestCase):
                 for item in result.items
             )
         )
+
+    async def test_same_key_after_failed_worker_does_not_consume_another_attempt(self):
+        job = await self.job()
+        job_id = job.id
+        key_one, key_two = str(uuid4()), str(uuid4())
+
+        handler = RetryHandler(
+            run=AsyncMock(
+                side_effect=RuntimeError("Synthetic handler failure")
+            ),
+            authorize=HANDLERS[job.job_type].authorize,
+            max_attempts=3,
+        )
+
+        with patch.dict(HANDLERS, {job.job_type: handler}):
+            first = await service.retry(
+                self.db,
+                self.admin,
+                job_id,
+                "Recovery",
+                str(uuid4()),
+                idempotency_key=key_one,
+            )
+
+            await service.worker_once(self.db)
+            await self.db.refresh(job)
+
+            self.assertEqual(job.status, "failed")
+            self.assertEqual(job.attempt_count, 2)
+
+            replay = await service.retry(
+                self.db,
+                self.admin,
+                job_id,
+                "Recovery",
+                str(uuid4()),
+                idempotency_key=key_one,
+            )
+
+            self.assertEqual(
+                replay.model_dump(),
+                first.model_dump(),
+            )
+            self.assertEqual(
+                await self.db.scalar(
+                    select(func.count()).select_from(JobRetryRequest)
+                ),
+                1,
+            )
+            self.assertEqual(
+                await self.db.scalar(
+                    select(func.count())
+                    .select_from(JobRetryRequest)
+                    .where(
+                        JobRetryRequest.status.in_(
+                            {"queued", "running"}
+                        )
+                    )
+                ),
+                0,
+            )
+            self.assertEqual(job.attempt_count, 2)
+
+            # A new request may consume the third total attempt.
+            second = await service.retry(
+                self.db,
+                self.admin,
+                job_id,
+                "Recovery",
+                str(uuid4()),
+                idempotency_key=key_two,
+            )
+
+            await service.worker_once(self.db)
+            await self.db.refresh(job)
+
+            self.assertEqual(job.attempt_count, 3)
+
+            replay_at_limit = await service.retry(
+                self.db,
+                self.admin,
+                job_id,
+                "Recovery",
+                str(uuid4()),
+                idempotency_key=key_two,
+            )
+
+            self.assertEqual(
+                replay_at_limit.model_dump(),
+                second.model_dump(),
+            )
+            self.assertEqual(
+                await self.db.scalar(
+                    select(func.count()).select_from(JobRetryRequest)
+                ),
+                2,
+            )
+            self.assertEqual(handler.run.await_count, 2)
+
+            with self.assertRaises(HTTPException) as ctx:
+                await service.retry(
+                    self.db,
+                    self.admin,
+                    job_id,
+                    "Recovery",
+                    str(uuid4()),
+                    idempotency_key=str(uuid4()),
+                )
+
+            self.assertEqual(ctx.exception.status_code, 409)
+
+    async def test_same_key_changed_reason_does_not_queue_again(self):
+        job = await self.job()
+        job_id, key = job.id, str(uuid4())
+
+        await service.retry(
+            self.db,
+            self.admin,
+            job_id,
+            "Original reason",
+            str(uuid4()),
+            idempotency_key=key,
+        )
+
+        with self.assertRaises(HTTPException) as ctx:
+            await service.retry(
+                self.db,
+                self.admin,
+                job_id,
+                "Changed reason",
+                str(uuid4()),
+                idempotency_key=key,
+            )
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(
+            ctx.exception.detail["code"],
+            "IDEMPOTENCY_CONFLICT",
+        )
+        self.assertEqual(
+            await self.db.scalar(
+                select(func.count()).select_from(JobRetryRequest)
+            ),
+            1,
+        )
+
+    async def test_failed_page_keeps_snapshot_when_retry_is_queued_before_response(self):
+        job = await self.job()
+        original_page = service.repo.job_page
+
+        async def page_then_queue(db, page, page_size, status):
+            # Queue a retry after the SELECT but before serialization.
+            # The old second lookup changed a failed result to pending.
+            result = await original_page(
+                db,
+                page,
+                page_size,
+                status,
+            )
+
+            await service.retry(
+                db,
+                self.admin,
+                job.id,
+                "Interleaved retry",
+                str(uuid4()),
+                idempotency_key=str(uuid4()),
+            )
+
+            return result
+
+        with patch.object(
+            service.repo,
+            "job_page",
+            side_effect=page_then_queue,
+        ):
+            result = await service.jobs(
+                self.db,
+                self.admin,
+                1,
+                20,
+                "failed",
+            )
+
+        self.assertEqual(result.total, 1)
+        self.assertEqual(
+            result.items[0].status,
+            "failed",
+        )
+
+        # A later query observes the newly queued retry.
+        pending = await service.jobs(
+            self.db,
+            self.admin,
+            1,
+            20,
+            "pending",
+        )
+
+        self.assertEqual(pending.total, 1)
+        self.assertEqual(
+            pending.items[0].status,
+            "pending",
+        )
+
+        failed = await service.jobs(
+            self.db,
+            self.admin,
+            1,
+            20,
+            "failed",
+        )
+
+        self.assertEqual(failed.total, 0)
+        self.assertEqual(failed.items, [])
+
+        summary = await service.summary(
+            self.db,
+            self.admin,
+        )
+
+        self.assertEqual(summary.failed_jobs, 0)
+
+    async def test_jobs_out_of_range_page_preserves_total(self):
+        await self.job()
+
+        result = await service.jobs(
+            self.db,
+            self.admin,
+            2,
+            20,
+            "failed",
+        )
+
+        self.assertEqual(result.total, 1)
+        self.assertEqual(result.items, [])
