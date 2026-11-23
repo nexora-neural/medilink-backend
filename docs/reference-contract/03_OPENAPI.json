@@ -3496,7 +3496,12 @@
             "required": false,
             "schema": {
               "type": "string",
-              "maxLength": 200
+              "enum": [
+                "condition",
+                "diagnosis",
+                "allergy",
+                "note"
+              ]
             }
           },
           {
@@ -20174,6 +20179,12 @@
           },
           "correction_reason": {
             "type": "string"
+          },
+          "organization_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "Server-assigned organization provenance; null for personal context."
           }
         },
         "required": [

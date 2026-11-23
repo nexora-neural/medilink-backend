@@ -184,6 +184,7 @@ class AllergiesModel(ClinicalRecordMixin, Base):
         ),
     )
 
+    clinical_code: Mapped[str | None] = mapped_column(Text)
     allergen: Mapped[str] = mapped_column(Text, nullable=False)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     reaction: Mapped[str | None] = mapped_column(Text)
@@ -215,6 +216,7 @@ class ClinicalNotesModel(ClinicalRecordMixin, Base):
         ),
     )
 
+    clinical_code: Mapped[str | None] = mapped_column(Text)
     note_type: Mapped[str] = mapped_column(Text, nullable=False)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     note_text: Mapped[str] = mapped_column(Text, nullable=False)
