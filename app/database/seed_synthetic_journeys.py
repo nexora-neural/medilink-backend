@@ -288,6 +288,52 @@ async def seed(
             "quantity_unit": "tablet",
         },
     )
+    second_medicine = demo_id("medicine-second")
+    await add(
+        "medicines",
+        {
+            "id": second_medicine,
+            "generic_name": "Synthetic medicine B",
+            "strength": "25 mg",
+            "form": "tablet",
+            "is_sample": True,
+        },
+    )
+    await add(
+        "prescription_items",
+        {
+            "id": demo_id("item-second"),
+            "prescription_id": rx,
+            "medicine_id": second_medicine,
+            "medicine_name_snapshot": "Synthetic medicine B 25 mg",
+            "dose_text": "1 tablet",
+            "frequency": "daily",
+            "quantity": Decimal("14"),
+            "quantity_unit": "tablet",
+        },
+    )
+    patient_rx = demo_id("patient-prescription")
+    await add(
+        "prescriptions",
+        {
+            "id": patient_rx,
+            "patient_user_id": patient,
+            "source": "patient",
+            "status": "draft",
+            "review_status": "not_reviewed",
+            "created_by": patient,
+        },
+    )
+    await add(
+        "prescription_items",
+        {
+            "id": demo_id("patient-item"),
+            "prescription_id": patient_rx,
+            "medicine_name_snapshot": "Synthetic patient-added item",
+            "dose_text": "1 tablet",
+            "frequency": "daily",
+        },
+    )
     schedule = demo_id("schedule")
     await add(
         "medication_schedules",
@@ -324,6 +370,33 @@ async def seed(
             "recorded_by": patient,
         },
     )
+    for name, status, hours in (
+        ("dose-taken-earlier", "taken", 4),
+        ("dose-skipped", "skipped", 3),
+        ("dose-unreported", "unreported", 2),
+        ("dose-upcoming", "upcoming", -2),
+    ):
+        occurrence_id = demo_id(name)
+        scheduled = now - timedelta(hours=hours)
+        await add(
+            "dose_occurrences",
+            {
+                "id": occurrence_id,
+                "schedule_id": schedule,
+                "scheduled_for": scheduled,
+                "status": status,
+            },
+        )
+        if status in {"taken", "skipped"}:
+            log = {
+                "id": demo_id(f"{name}-log"),
+                "dose_occurrence_id": occurrence_id,
+                "response": status,
+                "recorded_by": patient,
+            }
+            if status == "taken":
+                log["reported_taken_at"] = scheduled + timedelta(minutes=10)
+            await add("medication_logs", log)
     for kind, value, unit in (("weight", "68.0", "kg"), ("blood_glucose", "5.4", "mmol/L")):
         await add(
             "measurements",

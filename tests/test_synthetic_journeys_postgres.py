@@ -702,3 +702,53 @@ class DemoSeedPostgresTests(IsolatedAsyncioTestCase):
             )
         )
         self.assertEqual(old_log, demo_id("dose-log"))
+
+    async def test_reference_multi_item_patient_source_and_adherence_fixture(self):
+        await seed(self.connection, datetime.now(UTC))
+        tables = Base.metadata.tables
+        items = (
+            (
+                await self.connection.execute(
+                    select(tables["prescription_items"]).where(
+                        tables["prescription_items"].c.prescription_id == demo_id("prescription")
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        self.assertEqual({item["id"] for item in items}, {demo_id("item"), demo_id("item-second")})
+        patient_rx = (
+            (
+                await self.connection.execute(
+                    select(tables["prescriptions"]).where(
+                        tables["prescriptions"].c.id == demo_id("patient-prescription")
+                    )
+                )
+            )
+            .mappings()
+            .one()
+        )
+        self.assertEqual(
+            (patient_rx["source"], patient_rx["status"], patient_rx["review_status"]),
+            ("patient", "draft", "not_reviewed"),
+        )
+        occurrences = (
+            (
+                await self.connection.execute(
+                    select(tables["dose_occurrences"]).where(
+                        tables["dose_occurrences"].c.schedule_id == demo_id("schedule")
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        past = [
+            item for item in occurrences if item["status"] in ("taken", "skipped", "unreported")
+        ]
+        self.assertEqual(len(past), 4)
+        self.assertEqual(sum(item["status"] == "taken" for item in past), 2)
+        self.assertEqual(sum(item["status"] == "skipped" for item in past), 1)
+        self.assertEqual(sum(item["status"] == "unreported" for item in past), 1)
+        self.assertEqual(sum(item["status"] == "upcoming" for item in occurrences), 1)
