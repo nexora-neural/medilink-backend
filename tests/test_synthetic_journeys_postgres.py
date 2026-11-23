@@ -649,3 +649,56 @@ class DemoSeedPostgresTests(IsolatedAsyncioTestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "conditions identity collision"):
             await seed(self.connection, datetime.now(UTC))
+
+    async def test_patient_can_replace_seeded_medication_schedule(self):
+        from unittest.mock import patch
+
+        from httpx import ASGITransport, AsyncClient
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        from app.database.session import get_session
+        from app.main import app
+        from app.modules.identity.auth import get_current_user
+        from app.modules.identity.models import User
+
+        await seed(self.connection, datetime.now(UTC))
+        session = AsyncSession(
+            bind=self.connection, expire_on_commit=False, join_transaction_mode="create_savepoint"
+        )
+        self.addAsyncCleanup(session.close)
+        patient = await session.get(User, sample_id("user", "patient"))
+
+        async def session_override():
+            yield session
+
+        async def actor_override():
+            return patient
+
+        overrides = patch.dict(
+            app.dependency_overrides,
+            {
+                get_session: session_override,
+                get_current_user: actor_override,
+            },
+        )
+        overrides.start()
+        self.addCleanup(overrides.stop)
+        client = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+        self.addAsyncCleanup(client.aclose)
+        payload = {
+            "prescription_item_id": str(demo_id("item")),
+            "timezone": "Asia/Colombo",
+            "starts_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+            "times": ["09:00:00"],
+            "confirmed": True,
+        }
+        url = f"/api/v1/medication-schedules/{demo_id('schedule')}/replacement"
+        response = await client.post(url, json=payload, headers={"If-Match": '"1"'})
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["schedule"]["patient_user_id"], str(patient.id))
+        old_log = await self.connection.scalar(
+            select(Base.metadata.tables["medication_logs"].c.id).where(
+                Base.metadata.tables["medication_logs"].c.id == demo_id("dose-log")
+            )
+        )
+        self.assertEqual(old_log, demo_id("dose-log"))
