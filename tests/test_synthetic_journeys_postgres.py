@@ -42,6 +42,7 @@ class DemoSeedPostgresTests(IsolatedAsyncioTestCase):
             "medicines",
             "prescriptions",
             "prescription_items",
+            "prescription_ocr_jobs",
             "prescription_templates",
             "prescription_template_items",
             "medication_schedules",
@@ -752,3 +753,51 @@ class DemoSeedPostgresTests(IsolatedAsyncioTestCase):
         self.assertEqual(sum(item["status"] == "skipped" for item in past), 1)
         self.assertEqual(sum(item["status"] == "unreported" for item in past), 1)
         self.assertEqual(sum(item["status"] == "upcoming" for item in occurrences), 1)
+
+    async def test_failed_ocr_fixture_keeps_private_original_and_patient_draft(self):
+        await seed(self.connection, datetime.now(UTC))
+        t = Base.metadata.tables
+        job = (
+            (
+                await self.connection.execute(
+                    select(t["prescription_ocr_jobs"]).where(
+                        t["prescription_ocr_jobs"].c.id == demo_id("ocr-failed")
+                    )
+                )
+            )
+            .mappings()
+            .one()
+        )
+        document = (
+            (
+                await self.connection.execute(
+                    select(t["documents"]).where(t["documents"].c.id == job["original_document_id"])
+                )
+            )
+            .mappings()
+            .one()
+        )
+        draft = (
+            (
+                await self.connection.execute(
+                    select(t["prescriptions"]).where(
+                        t["prescriptions"].c.id == demo_id("patient-prescription")
+                    )
+                )
+            )
+            .mappings()
+            .one()
+        )
+        patient = sample_id("user", "patient")
+        self.assertEqual(
+            (job["patient_user_id"], job["status"], job["attempt_count"]), (patient, "failed", 1)
+        )
+        self.assertEqual(
+            (document["owner_user_id"], document["patient_user_id"], document["document_type"]),
+            (patient, patient, "prescription"),
+        )
+        self.assertEqual(
+            (draft["original_document_id"], draft["source"], draft["status"]),
+            (document["id"], "patient", "draft"),
+        )
+        self.assertIsNone(job["resulting_prescription_id"])

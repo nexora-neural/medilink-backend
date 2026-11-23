@@ -23,6 +23,7 @@ from app.database.session import engine
 from app.modules.documents import storage
 
 REPORT_BYTES = Path(__file__).with_name("synthetic_lab_report.png").read_bytes()
+PRESCRIPTION_BYTES = Path(__file__).with_name("synthetic_prescription.png").read_bytes()
 
 NAMESPACE = UUID("57c09dcc-536b-43e4-9742-1b1ab772e7c0")
 
@@ -312,6 +313,35 @@ async def seed(
             "quantity_unit": "tablet",
         },
     )
+    original = demo_id("ocr-document")
+    await add(
+        "documents",
+        {
+            "id": original,
+            "owner_user_id": patient,
+            "patient_user_id": patient,
+            "uploaded_by": patient,
+            "source": "patient",
+            "document_type": "prescription",
+            "original_filename": "synthetic-prescription.png",
+            "storage_key": original.hex,
+            "media_type": "image/png",
+            "byte_size": len(PRESCRIPTION_BYTES),
+            "sha256": hashlib.sha256(PRESCRIPTION_BYTES).hexdigest(),
+        },
+    )
+    await add(
+        "prescription_ocr_jobs",
+        {
+            "id": demo_id("ocr-failed"),
+            "patient_user_id": patient,
+            "original_document_id": original,
+            "requested_by_user_id": patient,
+            "status": "failed",
+            "attempt_count": 1,
+            "error_code": "SYNTHETIC_OCR_FAILURE",
+        },
+    )
     patient_rx = demo_id("patient-prescription")
     await add(
         "prescriptions",
@@ -319,6 +349,7 @@ async def seed(
             "id": patient_rx,
             "patient_user_id": patient,
             "source": "patient",
+            "original_document_id": original,
             "status": "draft",
             "review_status": "not_reviewed",
             "created_by": patient,
@@ -508,26 +539,26 @@ async def main():
             "set APP_ENV explicitly to local, development, dev or test to seed synthetic records"
         )
     try:
-        path = storage._path(demo_id("report-document").hex)
-        created = False
+        created_paths = []
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            if not path.is_file() or path.is_symlink() or path.read_bytes() != REPORT_BYTES:
-                raise RuntimeError("Synthetic report storage collision; seed aborted")
-        else:
-            created = True
-            try:
-                with os.fdopen(fd, "wb") as output:
-                    output.write(REPORT_BYTES)
-            except BaseException:
-                path.unlink(missing_ok=True)
-                raise
-        try:
+            for name, content in (
+                ("report-document", REPORT_BYTES),
+                ("ocr-document", PRESCRIPTION_BYTES),
+            ):
+                path = storage._path(demo_id(name).hex)
+                try:
+                    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                except FileExistsError:
+                    if not path.is_file() or path.is_symlink() or path.read_bytes() != content:
+                        raise RuntimeError("Synthetic document storage collision; seed aborted")
+                else:
+                    created_paths.append(path)
+                    with os.fdopen(fd, "wb") as output:
+                        output.write(content)
             async with engine.begin() as connection:
                 await seed(connection, datetime.now(UTC), args.patient_uid, args.doctor_uid)
-        except Exception:
-            if created:
+        except BaseException:
+            for path in created_paths:
                 path.unlink(missing_ok=True)
             raise
         print("Synthetic demo records seeded.")
