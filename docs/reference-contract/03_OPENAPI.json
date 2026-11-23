@@ -14449,7 +14449,7 @@
           "Administration"
         ],
         "summary": "View failed/background jobs",
-        "description": "Allowed actor: Admin or Super Admin: delegated administrative permissions. Requires job_runs persistence; no stack traces/secrets.",
+        "description": "Allowed actor: Admin or Super Admin: delegated administrative permissions. Requires job_runs persistence; no stack traces/secrets. Effective status, filtering, total and response fields are derived from a single SQL statement snapshot; no later per-job retry lookup can change the returned status.",
         "security": [
           {
             "FirebaseBearer": []
@@ -14574,7 +14574,13 @@
             "required": false,
             "schema": {
               "type": "string",
-              "maxLength": 200
+              "enum": [
+                "pending",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled"
+              ]
             }
           }
         ]
@@ -14587,7 +14593,7 @@
           "Administration"
         ],
         "summary": "Request bounded retry",
-        "description": "Allowed actor: Admin or Super Admin: delegated administrative permissions. Only retryable failed job, idempotent scheduling and current permissions/state rechecked by worker.",
+        "description": "Allowed actor: Admin or Super Admin: delegated administrative permissions. Only retryable failed job, idempotent scheduling and current permissions/state rechecked by worker. ML-67: persistent retry request, registered handlers only; three total attempts including the initial attempt. Queued retry projects as pending. No handler import paths are accepted from database rows. Required Idempotency-Key, scoped by actor, operation and job. Same key and reason returns the original 202 response even after worker failure or success, without scheduling again. Reusing a key with a different normalized reason returns 409 IDEMPOTENCY_CONFLICT. Replay still requires current administrative authorization.",
         "security": [
           {
             "FirebaseBearer": []
@@ -14694,6 +14700,17 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Use the same key and normalized reason for replays, including after worker completion. Use a new key for a genuinely new retry request.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
             }
           }
         ],
@@ -16735,6 +16752,135 @@
             "name": "page_size",
             "in": "query",
             "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/backups": {
+      "get": {
+        "operationId": "ml67_read_backup_evidence",
+        "tags": [
+          "Administration"
+        ],
+        "summary": "Read backup and restore-check evidence",
+        "description": "Admin or Super Admin. Metadata only: status, database/files inclusion, times and restore-check evidence; never backup contents or storage paths.",
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid action or malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied or inactive verification/account/organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource absent or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict, stale version, duplicate or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Field/business validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected failure with safe request_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-allowed-actors": "Admin or Super Admin: delegated administrative permissions",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
             "schema": {
               "type": "integer",
               "minimum": 1,
@@ -21683,7 +21829,8 @@
               "pending",
               "running",
               "succeeded",
-              "failed"
+              "failed",
+              "cancelled"
             ]
           },
           "attempt_count": {
@@ -22844,6 +22991,109 @@
           "page_size",
           "total"
         ]
+      },
+      "BackupRead": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "succeeded",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "database_included": {
+            "title": "Database Included",
+            "type": "boolean"
+          },
+          "files_included": {
+            "title": "Files Included",
+            "type": "boolean"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "finished_at": {
+            "title": "Finished At",
+            "format": "date-time",
+            "type": "string",
+            "nullable": true
+          },
+          "restore_check_status": {
+            "enum": [
+              "not_run",
+              "passed",
+              "failed"
+            ],
+            "title": "Restore Check Status",
+            "type": "string"
+          },
+          "restore_checked_at": {
+            "title": "Restore Checked At",
+            "format": "date-time",
+            "type": "string",
+            "nullable": true
+          },
+          "error_code": {
+            "title": "Error Code",
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "database_included",
+          "files_included",
+          "started_at",
+          "finished_at",
+          "restore_check_status",
+          "restore_checked_at",
+          "error_code"
+        ],
+        "title": "BackupRead",
+        "type": "object"
+      },
+      "BackupPage": {
+        "additionalProperties": false,
+        "properties": {
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BackupRead"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "page",
+          "page_size",
+          "total",
+          "items"
+        ],
+        "title": "BackupPage",
+        "type": "object"
       }
     }
   }

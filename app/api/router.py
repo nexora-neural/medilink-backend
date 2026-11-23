@@ -14,6 +14,7 @@ from app.modules.laboratory.router import router as laboratory_router
 from app.modules.measurements.router import router as measurements_router
 from app.modules.medication.router import router as medication_router
 from app.modules.notifications.router import router as notifications_router
+from app.modules.operations.router import router as operations_router
 from app.modules.organizations.router import router as organizations_router
 from app.modules.prescriptions.router import medicine_router
 from app.modules.prescriptions.router import router as prescriptions_router
@@ -43,6 +44,7 @@ for module_router in (
     vaccinations_router,
     notifications_router,
     audit_router,
+    operations_router,
     integrations_router,
     fhir_router,
     laboratory_router,
