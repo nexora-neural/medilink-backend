@@ -49,6 +49,9 @@ class DemoSeedPostgresTests(IsolatedAsyncioTestCase):
             "schedule_times",
             "dose_occurrences",
             "medication_logs",
+            "prescription_shares",
+            "dispensing_events",
+            "dispensing_items",
             "documents",
             "reports",
             "measurements",
@@ -126,6 +129,40 @@ class DemoSeedPostgresTests(IsolatedAsyncioTestCase):
         self.assertEqual(
             len([r for r in after["grant_categories"] if r.grant_id == grant["id"]]), 5
         )
+        share = (
+            await self.connection.execute(
+                select(tables["prescription_shares"]).where(
+                    tables["prescription_shares"].c.id == demo_id("historical-share")
+                )
+            )
+        ).mappings().one()
+        self.assertEqual(share["status"], "revoked")
+        self.assertEqual(share["patient_user_id"], patient)
+        self.assertIsNotNone(share["revoked_at"])
+        event = (
+            await self.connection.execute(
+                select(tables["dispensing_events"]).where(
+                    tables["dispensing_events"].c.id == demo_id("historical-dispensing")
+                )
+            )
+        ).mappings().one()
+        self.assertEqual(
+            (event["prescription_id"], event["share_id"]),
+            (demo_id("prescription"), demo_id("historical-share")),
+        )
+        self.assertEqual(event["pharmacist_user_id"], demo_id("pharmacist"))
+        dispensing_item = (
+            await self.connection.execute(
+                select(tables["dispensing_items"]).where(
+                    tables["dispensing_items"].c.id == demo_id("historical-dispensing-item")
+                )
+            )
+        ).mappings().one()
+        self.assertEqual(
+            (dispensing_item["event_id"], dispensing_item["prescription_item_id"]),
+            (demo_id("historical-dispensing"), demo_id("item")),
+        )
+        self.assertEqual(dispensing_item["quantity"], 10)
 
     async def test_rejects_existing_record_owned_by_another_patient(self):
         now = datetime.now(UTC)

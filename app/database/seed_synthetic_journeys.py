@@ -365,6 +365,50 @@ async def seed(
             "frequency": "daily",
         },
     )
+    # Historical, revoked sharing evidence only: no usable claim token is seeded.
+    share = demo_id("historical-share")
+    await add(
+        "prescription_shares",
+        {
+            "id": share,
+            "prescription_id": rx,
+            "patient_user_id": patient,
+            "claim_token_hash": hashlib.sha256(b"fictional-revoked-demo-share").hexdigest(),
+            "status": "revoked",
+            "claim_expires_at": now - timedelta(hours=2),
+            "claimed_by": demo_id("pharmacist"),
+            "claimed_organization_id": demo_id("pharmacy"),
+            "claimed_at": now - timedelta(hours=4),
+            "confirmed_at": now - timedelta(hours=3, minutes=50),
+            "confirmed_access_expires_at": now - timedelta(hours=1),
+            "revoked_at": now - timedelta(hours=2),
+            "created_at": now - timedelta(hours=5),
+        },
+    )
+    event = demo_id("historical-dispensing")
+    await add(
+        "dispensing_events",
+        {
+            "id": event,
+            "prescription_id": rx,
+            "pharmacist_user_id": demo_id("pharmacist"),
+            "organization_id": demo_id("pharmacy"),
+            "share_id": share,
+            "request_key": "fictional-historical-dispensing-ml123",
+            "dispensed_at": now - timedelta(hours=3),
+            "notes": "Synthetic partial dispensing",
+        },
+    )
+    await add(
+        "dispensing_items",
+        {
+            "id": demo_id("historical-dispensing-item"),
+            "event_id": event,
+            "prescription_item_id": item,
+            "quantity": Decimal("10"),
+            "quantity_unit": "tablet",
+        },
+    )
     schedule = demo_id("schedule")
     await add(
         "medication_schedules",
