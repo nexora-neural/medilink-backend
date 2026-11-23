@@ -14,6 +14,7 @@ from app.modules.identity.request_limits import require_authenticated_rate_limit
 from app.modules.integrations import service
 from app.modules.integrations.schemas import (
     CredentialCreated,
+    EligibleLaboratoriesReadPage,
     IntegrationClientInput,
     IntegrationClientRead,
     IntegrationClientsReadPage,
@@ -46,6 +47,24 @@ def _reject_unknown_query_params(request: Request, allowed: set[str]) -> None:
                 for name in unknown
             ]
         )
+
+
+@router.get(
+    "/admin/integration-clients/eligible-laboratories",
+    response_model=EligibleLaboratoriesReadPage,
+)
+async def get_eligible_laboratories(
+    request: Request,
+    db: DB,
+    actor: Actor,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> EligibleLaboratoriesReadPage:
+    """Return active laboratories with an eligible approved Lab Staff member."""
+    _reject_unknown_query_params(request, {"page", "page_size"})
+    return await service.list_eligible_laboratories(
+        db, actor, request, page=page, page_size=page_size
+    )
 
 
 @router.post(

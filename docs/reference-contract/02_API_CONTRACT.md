@@ -392,6 +392,7 @@ Path identifiers are UUIDs. `Idempotency-Key` marked **required** is a request h
 |---|---|---|---|
 | `POST /api/v1/admin/integration-clients` | Approve mock lab client | Super Admin | IntegrationClientInput → CredentialCreated (201) |
 | `GET /api/v1/admin/integration-clients` | List clients without credentials | Super Admin | No body → IntegrationClientsReadPage (200) |
+| `GET /api/v1/admin/integration-clients/eligible-laboratories` | List laboratories eligible for client approval | Super Admin | No body → EligibleLaboratoriesReadPage (200); page/page_size; id/name only |
 | `POST /api/v1/admin/integration-clients/{client_id}/rotate` | Rotate and expire old credential | Super Admin | RotateCredential → CredentialCreated (201) |
 | `POST /api/v1/admin/integration-clients/{client_id}/revoke` | Revoke client | Super Admin | ReasonInput → IntegrationClientsRead (201) |
 | `POST /api/v1/admin/integration-clients/{client_id}/suspend` | Suspend client | Super Admin | ReasonInput → IntegrationClientsRead (201) |
@@ -2195,3 +2196,7 @@ Lock the original, check ownership, source and active status, then atomically in
 ## Measurement correction history
 
 `GET /api/v1/measurements/{measurement_id}/history` returns a `MeasurementsReadPage` for the complete correction lineage containing the supplied version (active or superseded). Human Firebase bearer authentication is required. A patient may read their own history. A verified doctor may read the patient history only with the current `measurements_vaccinations` read grant; consultation write permission is not required for this read. Recheck account, verification and grant expiry/revocation on each request. Conceal inaccessible records with 404 and use 403 for a known forbidden action. Use page (default 1) and page_size (default 20, maximum 100); deterministic order is `created_at DESC, id DESC`. Return source, status, `supersedes_id`, correction reason and timestamps through the existing `MeasurementsRead` projection. The normal measurement list and chart include active rows by default; this endpoint includes active and superseded versions of one lineage only.
+
+### ML-114 eligible laboratory selection
+
+The selector and client creation use the same server eligibility predicate. A laboratory must be active and have at least one active user with an approved lab_staff membership, an approved lab_staff professional profile, and an approved lab_staff verification application for that same laboratory and user. Results contain only organization id and name, are ordered by name and id, are paginated (page >= 1; page_size 1-100, default 20), and are returned with Cache-Control: no-store. Unknown query parameters are rejected. Client creation rechecks current eligibility so revocation after loading the selector is denied. No database migration is required.
