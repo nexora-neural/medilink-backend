@@ -16,3 +16,4 @@ pypdf==7.0.0
 
 starlette
 httpx
+tzdata>=2026.6

@@ -2,8 +2,9 @@
 """API router for prescriptions, OCR workflow, and medicine catalogue."""
 
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Header, Query, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +17,8 @@ from app.modules.prescriptions.schemas import (
     MedicineInput,
     MedicinesRead,
     MedicinesReadPage,
+    PrescriptionDetail,
+    PrescriptionInput,
 )
 
 router = APIRouter(tags=["Prescriptions"])
@@ -97,6 +100,7 @@ async def get_admin_medicines(
     response_model=MedicinesRead,
     status_code=status.HTTP_201_CREATED,
     summary="Add curated sample catalogue entry",
+    responses={409: {"description": "A sample medicine with these details already exists."}},
 )
 async def create_medicine(
     payload: MedicineInput,
@@ -109,5 +113,54 @@ async def create_medicine(
         session=session,
         user=current_user,
         request=request,
+        payload=payload,
+    )
+
+
+
+@router.put(
+    "/prescriptions/{prescription_id}/draft",
+    response_model=PrescriptionDetail,
+    status_code=status.HTTP_200_OK,
+    responses={
+        403: {"description": "Access denied"},
+        404: {"description": "Prescription not found"},
+        409: {"description": "Stale version or invalid state"},
+        422: {"description": "Validation error"},
+    },
+)
+async def update_prescription_draft(
+    prescription_id: UUID,
+    payload: PrescriptionInput,
+    request: Request,
+    session: SessionDep,
+    current_user: UserDep,
+    if_match: str = Header(alias="If-Match"),
+):
+    """Replace an owned draft prescription using optimistic concurrency."""
+
+    try:
+        expected_version = int(if_match.strip().strip('"'))
+        if expected_version < 1:
+            raise ValueError
+    except ValueError:
+        from app.modules.identity.auth import AuthenticationError
+
+        raise AuthenticationError(
+            status_code=422,
+            detail={
+                "code": "VALIDATION_ERROR",
+                "message": "If-Match must contain a positive prescription version.",
+                "field_errors": {},
+                "request_id": request.state.request_id,
+            },
+        ) from None
+
+    return await service.replace_prescription_draft(
+        session=session,
+        user=current_user,
+        request=request,
+        prescription_id=prescription_id,
+        expected_version=expected_version,
         payload=payload,
     )
