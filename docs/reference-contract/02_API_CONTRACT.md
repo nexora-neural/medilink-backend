@@ -162,7 +162,7 @@ Path identifiers are UUIDs. `Idempotency-Key` marked **required** is a request h
 | `POST /api/v1/correction-requests/{correction_id}/decision` | Resolve correction request | Original author Doctor with active consent | CorrectionDecision → RecordCorrectionsRead (201) |
 
 - `GET /api/v1/patients/{patient_id}/clinical-records`:  Filters: `type`, `from`, `to`.
-- `POST /api/v1/patients/{patient_id}/clinical-records`: Server assigns source, recorder and organization. Patient clinical types limited to condition/allergy; professional entry requires active consultation and matching category. Vaccination entry is doctor-only baseline.
+- `POST /api/v1/patients/{patient_id}/clinical-records`: Empty allergy results mean unknown, never no known allergies. Server assigns source, recorder and organization. Patient clinical types limited to condition/allergy; professional entry requires active consultation and matching category. Vaccination entry is doctor-only baseline.
 - `POST /api/v1/clinical-records/{record_id}/versions`: Reason required; preserve original and link supersedes_id. Doctor cannot correct another author. Record/source cannot be promoted by correction.
 - `POST /api/v1/correction-requests/{correction_id}/decision`: Decision reason and replacement linkage require DB extension. Acceptance does not overwrite original.
 
@@ -1364,6 +1364,7 @@ This response schema extends `IntegrationAdminSubmissionRead` with the idempoten
 | `clinical_code` | string | No |
 | `source` | string: patient, doctor, pharmacist, lab_staff, approved_external_system, admin | Yes |
 | `recorded_by` | string (uuid) | Yes |
+| `organization_id` | string (uuid); server-assigned provenance | No |
 | `status` | string: active, entered_in_error, superseded, resolved | Yes |
 | `recorded_at` | string (date-time) | Yes |
 | `created_at` | string (date-time) | Yes |
