@@ -15,6 +15,7 @@ from app.modules.laboratory import models as _laboratory_models
 from app.modules.measurements import models as _measurements_models
 from app.modules.medication import models as _medication_models
 from app.modules.notifications import models as _notifications_models
+from app.modules.operations import models as _operations_models
 from app.modules.organizations import models as _organizations_models
 from app.modules.organizations.models import Organization, OrganizationMembership
 from app.modules.prescriptions import core_models as _prescription_core_models
