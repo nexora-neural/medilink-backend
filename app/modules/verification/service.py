@@ -361,11 +361,7 @@ async def list_review_applications(
     items = []
     for application in applications:
         evidence_ids = await repository.get_application_documents(db, application.id)
-        items.append(
-            VerificationApplicationRead.model_validate(application).model_copy(
-                update={"evidence_document_ids": evidence_ids}
-            )
-        )
+        items.append(await _review_application_read(db, application, evidence_ids))
     return VerificationApplicationsReadPage(
         items=items, page=page, page_size=page_size, total=total
     )
@@ -379,8 +375,26 @@ async def get_review_application(
     if application is None:
         raise _error(request, 404, "RESOURCE_NOT_FOUND", "Verification application not found.")
     evidence_ids = await repository.get_application_documents(db, application.id)
+    return await _review_application_read(db, application, evidence_ids)
+
+
+async def _review_application_read(
+    db: AsyncSession,
+    application: VerificationApplication,
+    evidence_ids: list[UUID],
+) -> VerificationApplicationRead:
+    applicant = await db.get(User, application.user_id)
+    organization = (
+        await db.get(Organization, application.organization_id)
+        if application.organization_id is not None
+        else None
+    )
     return VerificationApplicationRead.model_validate(application).model_copy(
-        update={"evidence_document_ids": evidence_ids}
+        update={
+            "evidence_document_ids": evidence_ids,
+            "applicant_display_name": applicant.display_name if applicant else None,
+            "organization_name": organization.name if organization else None,
+        }
     )
 
 
@@ -399,8 +413,16 @@ async def list_application_decisions(
     decisions, total = await repository.get_application_decisions_page(
         db, application_id, page=page, page_size=page_size
     )
+    decision_items = []
+    for item in decisions:
+        reviewer = await db.get(User, item.reviewer_user_id)
+        decision_items.append(
+            VerificationDecisionRead.model_validate(item).model_copy(
+                update={"reviewer_display_name": reviewer.display_name if reviewer else None}
+            )
+        )
     return VerificationDecisionsReadPage(
-        items=[VerificationDecisionRead.model_validate(item) for item in decisions],
+        items=decision_items,
         page=page,
         page_size=page_size,
         total=total,

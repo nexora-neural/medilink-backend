@@ -116,6 +116,7 @@ Path identifiers are UUIDs. `Idempotency-Key` marked **required** is a request h
 - `POST /api/v1/verification-applications`: Evidence IDs must be caller-owned private verification documents. Evidence can be uploaded before application creation.
 - `GET /api/v1/admin/verification-applications`:  Filters: `status`, `role`.
 - `GET /api/v1/admin/verification-applications/{application_id}`: Response includes evidence_document_ids after schema migration; files use authorized content route.
+- Admin queue and detail responses may include nullable `applicant_display_name` and `organization_name`; decision history may include nullable `reviewer_display_name`. These fields are display aids, while identifiers remain authoritative.
 - `POST /api/v1/admin/verification-applications/{application_id}/decision`: Only pending applications can be decided. Reviewer cannot decide their own application. Approval updates professional role and optional organization membership transactionally; retain reviewer, decision, reason, and time in append-only history. SLMC and other registration details are manually reviewed; the API does not claim automatic verification.
 - `GET /api/v1/admin/verification-applications/{application_id}/decisions`: Returns the append-only history in reverse chronological order, with `page` and `page_size` pagination (1–100).
 
