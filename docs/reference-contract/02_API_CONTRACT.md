@@ -2195,3 +2195,44 @@ Lock the original, check ownership, source and active status, then atomically in
 ## Measurement correction history
 
 `GET /api/v1/measurements/{measurement_id}/history` returns a `MeasurementsReadPage` for the complete correction lineage containing the supplied version (active or superseded). Human Firebase bearer authentication is required. A patient may read their own history. A verified doctor may read the patient history only with the current `measurements_vaccinations` read grant; consultation write permission is not required for this read. Recheck account, verification and grant expiry/revocation on each request. Conceal inaccessible records with 404 and use 403 for a known forbidden action. Use page (default 1) and page_size (default 20, maximum 100); deterministic order is `created_at DESC, id DESC`. Return source, status, `supersedes_id`, correction reason and timestamps through the existing `MeasurementsRead` projection. The normal measurement list and chart include active rows by default; this endpoint includes active and superseded versions of one lineage only.
+
+
+## ML-116: manual report upload and publication
+
+`POST /api/v1/patients/{patient_id}/documents` accepts multipart
+`stage_for_report` (boolean, optional, default `false`).
+
+- Patient: upload their own `document_type=report` with `stage_for_report=false`,
+  then publish using the returned `document_id`. No laboratory attribution,
+  `upload_request_id` or `lab_reference` is allowed in the publication payload.
+- Verified laboratory staff, staged flow: upload an initial report with
+  `stage_for_report=true` and an active matching `upload_request_id`. This creates
+  only the document, bound to that request. It does not consume the request,
+  publish a report, or enqueue a notification. Publish that document through
+  `POST /api/v1/patients/{patient_id}/reports` with the same upload request,
+  `lab_reference`, and a required `Idempotency-Key` (8-128 characters).
+- Verified laboratory staff, immediate flow: `stage_for_report=false` preserves
+  the existing upload API. Uploading an initial report publishes it immediately
+  with generated reference `upload-{upload_request_id}` and consumes the request.
+  Do not call the separate publish endpoint for this already-published document.
+- Staging requires an initial laboratory report: patient self-upload,
+  verification evidence, `supersedes_id`, and `correction_reason` cannot be staged.
+- Both laboratory publication flows enqueue exactly one `report_accepted`
+  notification per report version in the same transaction as the report and
+  request consumption. Original-laboratory corrections also notify the patient.
+  Notification insertion uses unique `report_accepted:{report_id}` deduplication.
+- Publication includes report audit and idempotency records in the transaction;
+  a failed publication commits none of these changes. A failed staged publication
+  leaves the previously uploaded staged document available for a valid retry.
+- Same key and same payload replays the original 201 response, including after
+  the request becomes used. Same key with another payload returns 409
+  `IDEMPOTENCY_CONFLICT`; a new publication with an expired, revoked, or consumed
+  request returns 409 `INVALID_STATE`. A document already published returns 409.
+- Missing/mismatched documents return 404 `NOT_FOUND`. Unauthorized role,
+  verification or membership returns 403. Invalid input returns 422. Normal
+  authentication and rate-limit errors remain 401 and 429.
+- `GET /api/v1/patients/{patient_id}/reports`: owner patient or currently verified
+  doctor with a valid `reports` category grant; supports page/page_size, from/to,
+  and status. `GET /api/v1/reports/{report_id}` additionally permits current staff
+  of the originating laboratory. `GET /api/v1/me/laboratory-reports` is restricted
+  to the actor's approved memberships in active laboratories.

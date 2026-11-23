@@ -28,6 +28,7 @@ from app.modules.laboratory.models import (
     ReportStatus,
     UploadRequestStatus,
 )
+from app.modules.laboratory.report_notifications import notify_report_accepted
 from app.modules.profiles.models import PatientProfile, ProfessionalProfile
 from app.modules.verification.models import VerificationApplicationDocument
 
@@ -235,6 +236,10 @@ async def _persist_lab_report(
 
         req.status = UploadRequestStatus.USED
         req.used_at = now
+        await db.flush()
+        await notify_report_accepted(
+            db, patient_id=patient_id, report_id=report.id,
+        )
         return
 
     if supersedes_id is None:
@@ -291,6 +296,13 @@ async def _persist_lab_report(
 
     db.add(replacement)
     previous_report.status = ReportStatus.SUPERSEDED
+
+    await db.flush()
+    await notify_report_accepted(
+        db,
+        patient_id=previous_report.patient_user_id,
+        report_id=replacement.id,
+    )
 
 
 async def upload_document(

@@ -1,4 +1,3 @@
-
 """Regression tests for ML-36 laboratory document persistence."""
 
 import unittest
@@ -23,6 +22,7 @@ class TestLaboratoryReportPersistence(unittest.IsolatedAsyncioTestCase):
         self.db = MagicMock()
         self.db.scalar = AsyncMock()
         self.db.flush = AsyncMock()
+        self.db.execute = AsyncMock()
 
         self.user = SimpleNamespace(id=uuid4())
         self.patient_id = uuid4()
