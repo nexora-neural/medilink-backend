@@ -116,10 +116,17 @@ class VerificationAdminPostgreSQLTests(IsolatedAsyncioTestCase):
             str(self.application_id),
             {item["id"] for item in response.json()["items"]},
         )
+        application = next(
+            item for item in response.json()["items"] if item["id"] == str(self.application_id)
+        )
+        self.assertEqual(
+            application["applicant_display_name"], self.applicant.display_name
+        )
 
         response = await self.client.get(f"{BASE_PATH}/{self.application_id}")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["evidence_document_ids"], [])
+        self.assertEqual(response.json()["applicant_display_name"], self.applicant.display_name)
 
         response = await self.client.post(
             f"{BASE_PATH}/{self.application_id}/decision",
@@ -160,6 +167,9 @@ class VerificationAdminPostgreSQLTests(IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["total"], 1)
         self.assertEqual(response.json()["items"][0]["reviewer_user_id"], str(self.reviewer.id))
+        self.assertEqual(
+            response.json()["items"][0]["reviewer_display_name"], self.reviewer.display_name
+        )
 
     async def test_pending_applicant_submits_and_reads_own_evidence_without_role(self):
         await self.session.delete(self.application)

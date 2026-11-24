@@ -73,6 +73,8 @@ class VerificationApplicationRead(BaseModel):
     reviewed_at: datetime | None
     review_reason: str | None
     evidence_document_ids: list[UUID] = Field(default_factory=list)
+    applicant_display_name: str | None = None
+    organization_name: str | None = None
 
 
 class VerificationApplicationsReadPage(BaseModel):
@@ -103,6 +105,7 @@ class VerificationDecisionRead(BaseModel):
     decision: str
     reason: str
     decided_at: datetime
+    reviewer_display_name: str | None = None
 
 
 class VerificationDecisionsReadPage(BaseModel):

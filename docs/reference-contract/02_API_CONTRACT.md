@@ -116,6 +116,7 @@ Path identifiers are UUIDs. `Idempotency-Key` marked **required** is a request h
 - `POST /api/v1/verification-applications`: Evidence IDs must be caller-owned private verification documents. Evidence can be uploaded before application creation.
 - `GET /api/v1/admin/verification-applications`:  Filters: `status`, `role`.
 - `GET /api/v1/admin/verification-applications/{application_id}`: Response includes evidence_document_ids after schema migration; files use authorized content route.
+- Admin queue and detail responses may include nullable `applicant_display_name` and `organization_name`; decision history may include nullable `reviewer_display_name`. These fields are display aids, while identifiers remain authoritative.
 - `POST /api/v1/admin/verification-applications/{application_id}/decision`: Only pending applications can be decided. Reviewer cannot decide their own application. Approval updates professional role and optional organization membership transactionally; retain reviewer, decision, reason, and time in append-only history. SLMC and other registration details are manually reviewed; the API does not claim automatic verification.
 - `GET /api/v1/admin/verification-applications/{application_id}/decisions`: Returns the append-only history in reverse chronological order, with `page` and `page_size` pagination (1–100).
 
@@ -162,7 +163,7 @@ Path identifiers are UUIDs. `Idempotency-Key` marked **required** is a request h
 | `POST /api/v1/correction-requests/{correction_id}/decision` | Resolve correction request | Original author Doctor with active consent | CorrectionDecision → RecordCorrectionsRead (201) |
 
 - `GET /api/v1/patients/{patient_id}/clinical-records`:  Filters: `type`, `from`, `to`.
-- `POST /api/v1/patients/{patient_id}/clinical-records`: Server assigns source, recorder and organization. Patient clinical types limited to condition/allergy; professional entry requires active consultation and matching category. Vaccination entry is doctor-only baseline.
+- `POST /api/v1/patients/{patient_id}/clinical-records`: Empty allergy results mean unknown, never no known allergies. Server assigns source, recorder and organization. Patient clinical types limited to condition/allergy; professional entry requires active consultation and matching category. Vaccination entry is doctor-only baseline.
 - `POST /api/v1/clinical-records/{record_id}/versions`: Reason required; preserve original and link supersedes_id. Doctor cannot correct another author. Record/source cannot be promoted by correction.
 - `POST /api/v1/correction-requests/{correction_id}/decision`: Decision reason and replacement linkage require DB extension. Acceptance does not overwrite original.
 
@@ -1365,6 +1366,7 @@ This response schema extends `IntegrationAdminSubmissionRead` with the idempoten
 | `clinical_code` | string | No |
 | `source` | string: patient, doctor, pharmacist, lab_staff, approved_external_system, admin | Yes |
 | `recorded_by` | string (uuid) | Yes |
+| `organization_id` | string (uuid); server-assigned provenance | No |
 | `status` | string: active, entered_in_error, superseded, resolved | Yes |
 | `recorded_at` | string (date-time) | Yes |
 | `created_at` | string (date-time) | Yes |
@@ -2196,6 +2198,33 @@ Lock the original, check ownership, source and active status, then atomically in
 ## Measurement correction history
 
 `GET /api/v1/measurements/{measurement_id}/history` returns a `MeasurementsReadPage` for the complete correction lineage containing the supplied version (active or superseded). Human Firebase bearer authentication is required. A patient may read their own history. A verified doctor may read the patient history only with the current `measurements_vaccinations` read grant; consultation write permission is not required for this read. Recheck account, verification and grant expiry/revocation on each request. Conceal inaccessible records with 404 and use 403 for a known forbidden action. Use page (default 1) and page_size (default 20, maximum 100); deterministic order is `created_at DESC, id DESC`. Return source, status, `supersedes_id`, correction reason and timestamps through the existing `MeasurementsRead` projection. The normal measurement list and chart include active rows by default; this endpoint includes active and superseded versions of one lineage only.
+
+
+
+## ML-67 operations, audit and activity reconciliation
+
+- Add GET /api/v1/admin/backups (BackupPage) to expose backup status, database/files coverage and restore-check evidence. OperationalSummary.last_backup_at alone is insufficient evidence. This is the proposed ticket reconciliation and requires normal team contract review.
+- last_backup_at is the latest finished successful backup containing both database and files; otherwise null. Restore checks are reported separately, never inferred.
+- Preserve the existing pending API status by mapping queued database jobs to pending. Add cancelled to JobStatus so stored cancellations can be represented accurately.
+- updated_at is derived from the latest created/start/finish/retry-request timestamp. No fabricated ORM updated_at column is introduced.
+- A queued retry is stored separately from the last execution outcome. Jobs with an open retry project as pending, including status filtering. Duplicate scheduling is serialized by the job lock and a partial unique queue index.
+- Retry policy: three total attempts including the original. Preserve original execution data until the worker begins, append request/completion audit events, retain private reasons in job_retry_requests. Failure at audit persistence rolls back scheduling. Unknown job types return 409.
+- Only operations.database_check currently has a handler. Real clinical/external background jobs require explicitly implemented permission checks and transactional or provider-idempotent execution before registration. Do not register a no-op handler to simulate completion.
+- Worker rechecks the requesting administrator's active local role and handler-specific permission, uses FOR UPDATE SKIP LOCKED, and commits execution with its audit. Handler effects must be transactional; external services need idempotency/outbox integration.
+- Admin audit visibility is the explicit DELEGATED_ACTIONS allowlist; new/privileged actions are denied by default. Super Admin can inspect other audit events through a scrubbed projection. No audit edit/delete API.
+- Patient activity resolves event targets to persisted patient ownership and returns six safe fields. Actor identity alone does not establish ownership. Existing generic api.request rows have no concrete patient target and cannot safely be reconstructed as historical record-access activity.
+- Only already-recorded business/access events are returned. Add target-specific read events to future clinical routes as those routes are implemented; do not infer target ownership from raw request paths.
+- Backups API reads existing evidence. It does not create backups, encrypt backup files, run a backup schedule, or perform restore checks; those producers must populate backup_runs and call record_backup_run.
+- Paginated lists use page >= 1, page_size 1..100, created timestamp/id descending (backup start timestamp/id). Unknown query/body fields rejected. Audit from is inclusive; to exclusive; timezone required. Protected responses use no-store.
+
+
+### ML-67 PR #62 retry replay and job-list snapshot fixes
+
+- POST /api/v1/admin/jobs/{job_id}/retry now requires Idempotency-Key (8..128 characters). Reuse a key for a replay of the same normalized reason; use a new key for a genuinely new retry request.
+- The existing api_idempotency_records table stores the original 202 response in the same transaction as queue scheduling and its audit event. A replay after worker failure or success returns that original response and does not create another request, audit event or attempt. GET /admin/jobs reports the current execution state.
+- Keys are scoped to the user, operation and job. A key used with a different normalized reason returns 409 IDEMPOTENCY_CONFLICT. Current administrative authorization is checked before replay. No new database table or migration is needed.
+- GET /api/v1/admin/jobs derives effective status, status filtering, pagination total and returned fields in one SQL statement. A retry committed after that SELECT cannot rewrite a returned failed row as pending. A subsequent request observes the newer state.
+- Regression coverage includes replay after a failed worker, intentional new retries up to the existing three-attempt limit, key/payload conflicts, a deterministic query/serialization interleaving, header validation and out-of-range pages.
 
 ### ML-114 eligible laboratory selection
 
