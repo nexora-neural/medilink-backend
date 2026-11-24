@@ -196,6 +196,15 @@ class PrescriptionDetail(BaseModel):
     reviews: list[PrescriptionReviewRead]
 
 
+class PrescriptionDetailPage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[PrescriptionDetail]
+    page: int
+    page_size: int
+    total: int
+
+
 class ClinicalWriteErrorResponse(BaseModel):
     code: str
     message: str

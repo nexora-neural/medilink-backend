@@ -4,7 +4,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Query, Request, status
+from fastapi import APIRouter, Depends, Header, Query, Request, status, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +19,7 @@ from app.modules.prescriptions.schemas import (
     MedicinesReadPage,
     PrescriptionDetail,
     PrescriptionInput,
+    PrescriptionDetailPage,
 )
 
 router = APIRouter(tags=["Prescriptions"])
@@ -164,3 +165,109 @@ async def update_prescription_draft(
         expected_version=expected_version,
         payload=payload,
     )
+
+
+@router.get(
+    "/patients/{patient_id}/prescriptions",
+    response_model=PrescriptionDetailPage,
+    status_code=status.HTTP_200_OK,
+)
+async def get_patient_prescriptions(
+    patient_id: UUID,
+    request: Request,
+    session: SessionDep,
+    current_user: UserDep,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    status_filter: Annotated[
+        str | None,
+        Query(
+            alias="status",
+            pattern=(
+                r"^(draft|active|completed|discontinued|"
+                r"cancelled|superseded)$"
+            ),
+        ),
+    ] = None,
+    source: Annotated[
+        str | None,
+        Query(pattern=r"^(patient|doctor|approved_external_system)$"),
+    ] = None,
+) -> PrescriptionDetailPage:
+    return await service.list_prescriptions(
+        session=session,
+        user=current_user,
+        request=request,
+        patient_id=patient_id,
+        page=page,
+        page_size=page_size,
+        status=status_filter,
+        source=source,
+    )
+
+
+@router.get(
+    "/prescriptions/{prescription_id}",
+    response_model=PrescriptionDetail,
+    status_code=status.HTTP_200_OK,
+)
+async def get_prescription(
+    prescription_id: UUID,
+    request: Request,
+    session: SessionDep,
+    current_user: UserDep,
+) -> PrescriptionDetail:
+    return await service.read_prescription(
+        session=session,
+        user=current_user,
+        request=request,
+        prescription_id=prescription_id,
+    )
+
+@router.post(
+    "/patients/{patient_id}/prescriptions",
+    response_model=PrescriptionDetail,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        403: {"description": "Access denied"},
+        422: {"description": "Validation error"},
+    },
+)
+async def create_patient_prescription(
+    patient_id: UUID,
+    payload: PrescriptionInput,
+    request: Request,
+    session: SessionDep,
+    current_user: UserDep,
+) -> PrescriptionDetail:
+    return await service.create_draft(
+        session=session,
+        user=current_user,
+        request=request,
+        patient_id=patient_id,
+        payload=payload,
+    )
+
+@router.delete(
+    "/prescriptions/{prescription_id}/draft",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    responses={
+        403: {"description": "Access denied"},
+        404: {"description": "Prescription not found"},
+        409: {"description": "Invalid state or linked records"},
+    },
+)
+async def delete_prescription_draft(
+    prescription_id: UUID,
+    request: Request,
+    session: SessionDep,
+    current_user: UserDep,
+) -> Response:
+    await service.delete_draft(
+        session=session,
+        user=current_user,
+        request=request,
+        prescription_id=prescription_id,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
