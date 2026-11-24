@@ -393,6 +393,7 @@ Path identifiers are UUIDs. `Idempotency-Key` marked **required** is a request h
 |---|---|---|---|
 | `POST /api/v1/admin/integration-clients` | Approve mock lab client | Super Admin | IntegrationClientInput → CredentialCreated (201) |
 | `GET /api/v1/admin/integration-clients` | List clients without credentials | Super Admin | No body → IntegrationClientsReadPage (200) |
+| `GET /api/v1/admin/integration-clients/eligible-laboratories` | List laboratories eligible for client approval | Super Admin | No body → EligibleLaboratoriesReadPage (200); page/page_size; id/name only |
 | `POST /api/v1/admin/integration-clients/{client_id}/rotate` | Rotate and expire old credential | Super Admin | RotateCredential → CredentialCreated (201) |
 | `POST /api/v1/admin/integration-clients/{client_id}/revoke` | Revoke client | Super Admin | ReasonInput → IntegrationClientsRead (201) |
 | `POST /api/v1/admin/integration-clients/{client_id}/suspend` | Suspend client | Super Admin | ReasonInput → IntegrationClientsRead (201) |
@@ -2224,3 +2225,7 @@ Lock the original, check ownership, source and active status, then atomically in
 - Keys are scoped to the user, operation and job. A key used with a different normalized reason returns 409 IDEMPOTENCY_CONFLICT. Current administrative authorization is checked before replay. No new database table or migration is needed.
 - GET /api/v1/admin/jobs derives effective status, status filtering, pagination total and returned fields in one SQL statement. A retry committed after that SELECT cannot rewrite a returned failed row as pending. A subsequent request observes the newer state.
 - Regression coverage includes replay after a failed worker, intentional new retries up to the existing three-attempt limit, key/payload conflicts, a deterministic query/serialization interleaving, header validation and out-of-range pages.
+
+### ML-114 eligible laboratory selection
+
+The selector and client creation use the same server eligibility predicate. A laboratory must be active and have at least one active user with an approved lab_staff membership, an approved lab_staff professional profile, and an approved lab_staff verification application for that same laboratory and user. Results contain only organization id and name, are ordered by name and id, are paginated (page >= 1; page_size 1-100, default 20), and are returned with Cache-Control: no-store. Unknown query parameters are rejected. Client creation rechecks current eligibility so revocation after loading the selector is denied. No database migration is required.
