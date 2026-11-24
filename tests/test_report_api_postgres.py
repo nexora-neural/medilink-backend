@@ -279,6 +279,23 @@ class ReportPostgresTests(IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 409, response.text)
         self.assertEqual(await self.count(Report, Report.document_id == document_id), 0)
 
+    async def test_truncated_file_cannot_be_published(self):
+        self.storage_patch.stop()
+        self.actor_id = self.patient_id
+        with (
+            tempfile.TemporaryDirectory() as root,
+            patch.object(settings, "private_upload_dir", root),
+        ):
+            upload = await self.upload()
+            self.assertEqual(upload.status_code, 201, upload.text)
+            document_id = UUID(upload.json()["id"])
+            doc = await self.db.get(Document, document_id)
+            path = document_service.storage.get_download_path(doc.storage_key)
+            path.write_bytes(b"")
+            response = await self.publish(document_id)
+            self.assertEqual(response.status_code, 409, response.text)
+            self.assertEqual(await self.count(Report, Report.document_id == document_id), 0)
+
     async def test_real_private_file_loss_prevents_publish(self):
         self.storage_patch.stop()
         self.actor_id = self.patient_id

@@ -62,8 +62,19 @@ def quarantine(root: Path, keys: list[str]) -> None:
         source = root / key
         if not stat.S_ISREG(source.lstat().st_mode):
             raise OSError("Orphan is no longer a regular file")
-        # link() fails if the destination exists; no existing evidence is overwritten.
-        os.link(source, destination / key, follow_symlinks=False)
+        target = destination / key
+        try:
+            # Never overwrite an existing quarantine entry.
+            os.link(source, target, follow_symlinks=False)
+        except FileExistsError:
+            source_stat = source.lstat()
+            target_stat = target.lstat()
+            if (
+                not stat.S_ISREG(target_stat.st_mode)
+                or (source_stat.st_dev, source_stat.st_ino)
+                != (target_stat.st_dev, target_stat.st_ino)
+            ):
+                raise
         source.unlink()
 
 

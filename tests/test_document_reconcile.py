@@ -8,6 +8,19 @@ from app.modules.documents.reconcile import MIN_AGE_SECONDS, inventory, quaranti
 
 
 class ReconciliationTests(unittest.TestCase):
+    def test_interrupted_quarantine_move_can_be_retried(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            key = "a" * 32
+            source = root / key
+            source.write_bytes(b"private")
+            (root / ".quarantine").mkdir()
+            target = root / ".quarantine" / key
+            os.link(source, target)
+            quarantine(root, [key])
+            self.assertFalse(source.exists())
+            self.assertEqual(target.read_bytes(), b"private")
+
     def test_inventory_and_quarantine_preserve_referenced_and_recent_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

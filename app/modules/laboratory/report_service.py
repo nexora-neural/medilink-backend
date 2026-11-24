@@ -141,7 +141,7 @@ async def _publish_report(db, actor, patient_id, body, key, request_id):
         )
 
     try:
-        await run_in_threadpool(storage.get_download_path, document.storage_key)
+        await run_in_threadpool(storage.get_download_path, document.storage_key, document.byte_size)
     except (OSError, ValueError) as exc:
         raise LabUploadRequestError(
             409, "INVALID_STATE", "Report document content is unavailable.",

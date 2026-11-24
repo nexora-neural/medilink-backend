@@ -66,6 +66,7 @@ class ReportFailureTests(IsolatedAsyncioTestCase):
             source="patient",
             staged_report_request_id=None,
             storage_key="a" * 32,
+            byte_size=4,
         )
         with (
             patch.object(report_service, "require_patient", new=AsyncMock()),
