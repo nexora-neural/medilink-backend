@@ -8,6 +8,21 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.modules.integrations.models import IntegrationStatus, SubmissionStatus
 
 
+class EligibleLaboratoryRead(BaseModel):
+    """Minimal organization option; never expose staff identity or verification evidence."""
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+
+
+class EligibleLaboratoriesReadPage(BaseModel):
+    items: list[EligibleLaboratoryRead]
+    page: int
+    page_size: int
+    total: int
+
+
 class IntegrationClientInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 

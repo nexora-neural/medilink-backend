@@ -168,6 +168,9 @@ Firebase identifiers and creates no Firebase accounts or login credentials. Exis
 are not overwritten; rerunning the command does not duplicate the seeded identities.
 The verification tables from the verification migration must be present first.
 
+For connected synthetic clinical records, report files and local test account options, see
+[the synthetic demo seed guide](docs/synthetic-demo-records.md).
+
 ### Local Firebase test-account role seeding
 
 Each developer can link an existing shared Firebase test account to their own local

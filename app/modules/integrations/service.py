@@ -16,6 +16,8 @@ from app.modules.integrations import repository
 from app.modules.integrations.models import IntegrationClient, SubmissionStatus
 from app.modules.integrations.schemas import (
     CredentialCreated,
+    EligibleLaboratoriesReadPage,
+    EligibleLaboratoryRead,
     IntegrationAdminSubmissionRead,
     IntegrationClientInput,
     IntegrationClientRead,
@@ -138,6 +140,20 @@ async def create_client(
     except Exception:
         await db.rollback()
         raise
+
+
+async def list_eligible_laboratories(
+    db: AsyncSession, actor: User, request: Request, *, page: int, page_size: int
+) -> EligibleLaboratoriesReadPage:
+    """List options using the same staff and organization checks as creation."""
+    await _require_super_admin(db, actor, request)
+    rows, total = await repository.list_approved_laboratories(db, page=page, page_size=page_size)
+    return EligibleLaboratoriesReadPage(
+        items=[EligibleLaboratoryRead.model_validate(row) for row in rows],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
 
 
 async def list_clients(

@@ -212,6 +212,97 @@ class IntegrationAdminPostgresTests(IsolatedAsyncioTestCase):
             "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
         }
 
+    async def test_eligible_labs_returns_only_option_fields_and_validates_pagination(self):
+        path = f"{CLIENTS}/eligible-laboratories"
+        response = await self.client.get(path, params={"page": 1, "page_size": 1})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {
+            "items": [{"id": str(self.organization.id), "name": self.organization.name}],
+            "page": 1, "page_size": 1, "total": 1,
+        })
+        second = await self.client.get(path, params={"page": 2, "page_size": 1})
+        self.assertEqual(second.json()["items"], [])
+        self.assertEqual(second.json()["total"], 1)
+        for params in ({"page": 0}, {"page_size": 101}, {"unexpected": "value"}):
+            with self.subTest(params=params):
+                response = await self.client.get(path, params=params)
+                self.assertEqual(response.status_code, 422)
+
+    async def test_eligible_labs_requires_active_super_admin(self):
+        path = f"{CLIENTS}/eligible-laboratories"
+        self.actor = self.admin
+        response = await self.client.get(path)
+        self.assertEqual(response.status_code, 403)
+        self.actor = self.super_admin
+        user = await self.session.get(User, self.super_admin.id)
+        user.status = "suspended"
+        await self.session.flush()
+        response = await self.client.get(path)
+        self.assertEqual(response.status_code, 403)
+
+    async def test_selector_and_creation_share_all_lab_and_staff_eligibility_checks(self):
+        path = f"{CLIENTS}/eligible-laboratories"
+        staff = await self.session.get(User, self.lab_staff.id)
+        membership = await self.session.scalar(select(OrganizationMembership).where(
+            OrganizationMembership.user_id == self.lab_staff.id
+        ))
+        profile = await self.session.get(ProfessionalProfile, self.lab_staff.id)
+        application = await self.session.scalar(select(VerificationApplication).where(
+            VerificationApplication.user_id == self.lab_staff.id
+        ))
+        cases = [
+            (self.organization, "status", "suspended"),
+            (self.organization, "status", "pending"),
+            (self.organization, "type", "clinic"),
+            (staff, "status", "suspended"),
+            (membership, "status", "pending"),
+            (membership, "status", "suspended"),
+            (membership, "role", "doctor"),
+            (profile, "verification_status", "pending"),
+            (profile, "role", "pharmacist"),
+            (application, "status", "rejected"),
+            (application, "role", "doctor"),
+            (application, "organization_id", None),
+        ]
+        for row, field, value in cases:
+            original = getattr(row, field)
+            with self.subTest(model=type(row).__name__, field=field, value=value):
+                setattr(row, field, value)
+                await self.session.flush()
+                response = await self.client.get(path)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["items"], [])
+                self.assertEqual(response.json()["total"], 0)
+                response = await self.client.post(CLIENTS, json=self.create_payload())
+                self.assertEqual(response.status_code, 422, response.text)
+                # create_client rolls back failed mutations; reload the objects before restoring.
+                for persisted in (self.organization, staff, membership, profile, application):
+                    await self.session.refresh(persisted)
+                setattr(row, field, original)
+                await self.session.flush()
+        response = await self.client.get(path)
+        self.assertEqual(response.json()["total"], 1)
+
+    async def test_eligible_labs_deduplicates_multiple_approved_staff(self):
+        extra = await self.create_user("ML-114 Second Approved Staff", "super_admin")
+        self.session.add_all([
+            ProfessionalProfile(user_id=extra.id, role="lab_staff", verification_status="approved"),
+            OrganizationMembership(
+                organization_id=self.organization.id, user_id=extra.id,
+                role="lab_staff", status="approved", verified_at=datetime.now(UTC),
+            ),
+            VerificationApplication(
+                organization_id=self.organization.id, user_id=extra.id,
+                role="lab_staff", status="approved", registration_number="ML114-SECOND",
+                reviewed_by=self.super_admin.id, reviewed_at=datetime.now(UTC),
+            ),
+        ])
+        await self.session.flush()
+        response = await self.client.get(f"{CLIENTS}/eligible-laboratories")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["total"], 1)
+        self.assertEqual(len(response.json()["items"]), 1)
+
     async def test_create_list_rotate_suspend_and_revoke_lifecycle(self):
         response = await self.client.post(CLIENTS, json=self.create_payload())
         self.assertEqual(response.status_code, 201, response.text)
