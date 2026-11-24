@@ -44,7 +44,10 @@ class PrescriptionOcrJobModel(Base):
         UniqueConstraint(
             "patient_user_id", "original_document_id", name="uq_prescription_ocr_patient_document"
         ),
-        UniqueConstraint("resulting_prescription_id"),
+        UniqueConstraint(
+            "resulting_prescription_id",
+            name="prescription_ocr_jobs_resulting_prescription_id_key",
+        ),
         CheckConstraint("attempt_count >= 0", name=conv("ck_prescription_ocr_attempts")),
         CheckConstraint(
             "extracted_fields IS NULL OR jsonb_typeof(extracted_fields) = 'object'",
