@@ -1,4 +1,4 @@
-"""Transactional patient notifications shared by manual report publication flows."""
+"""Transactional patient notifications shared by report publication flows."""
 
 from uuid import UUID
 
@@ -16,10 +16,12 @@ async def notify_report_accepted(
         insert(Notification).values(
             user_id=patient_id,
             notification_type="report_accepted",
-            title="Laboratory report available",
-            body="A laboratory report has been added to your records.",
+            title="Report available",
+            body="A report has been added to your records.",
             related_type="report",
             related_id=report_id,
             dedupe_key=f"report_accepted:{report_id}",
-        ).on_conflict_do_nothing(index_elements=[Notification.dedupe_key])
+        ).on_conflict_do_nothing(
+            index_elements=[Notification.dedupe_key]
+        )
     )
