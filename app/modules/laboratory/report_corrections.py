@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.idempotency import (
     IdempotencyConflict,
@@ -204,20 +204,28 @@ async def withdraw_report(db, actor, report_id, reason, request_id):
 
 
 async def get_history(db, actor, report_id: UUID, page, page_size):
-    await get_report(db, actor, report_id)  # Recheck current read permissions.
+    await get_report(db, actor, report_id)
+
     report = await _report(db, report_id)
-    rows = list(
-        await db.scalars(
-            (await _lineage(db, report)).order_by(
-                Report.created_at.desc(),
-                Report.id.desc(),
-            )
-        )
+    statement = await _lineage(db, report)
+
+    total = await db.scalar(
+        select(func.count()).select_from(statement.subquery())
     )
-    start = (page - 1) * page_size
+
+    rows = await db.scalars(
+        statement
+        .order_by(
+            Report.created_at.desc(),
+            Report.id.desc(),
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+
     return ReportsReadPage(
-        items=[ReportsRead.model_validate(row) for row in rows[start : start + page_size]],
+        items=[ReportsRead.model_validate(row) for row in rows],
         page=page,
         page_size=page_size,
-        total=len(rows),
+        total=total,
     )
