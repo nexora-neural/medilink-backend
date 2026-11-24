@@ -3,6 +3,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
+from starlette.concurrency import run_in_threadpool
 
 from app.core.idempotency import (
     IdempotencyConflict,
@@ -14,6 +15,7 @@ from app.core.idempotency import (
 from app.modules.audit.service import append_event
 from app.modules.clinical_records.models import RecordSource
 from app.modules.documents import repository as documents
+from app.modules.documents import storage
 from app.modules.documents.service import _doctor_can_read
 from app.modules.identity.authorization import (
     deny,
@@ -137,6 +139,13 @@ async def _publish_report(db, actor, patient_id, body, key, request_id):
         raise LabUploadRequestError(
             409, "INVALID_STATE", "Document is already published.",
         )
+
+    try:
+        await run_in_threadpool(storage.get_download_path, document.storage_key)
+    except (OSError, ValueError) as exc:
+        raise LabUploadRequestError(
+            409, "INVALID_STATE", "Report document content is unavailable.",
+        ) from exc
 
     identity = None
 

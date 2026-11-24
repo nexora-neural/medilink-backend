@@ -32,10 +32,33 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(ValueError):
                     storage.get_download_path("../sensitive.txt")
 
+    def test_rejects_symlink_to_private_file(self):
+        with tempfile.TemporaryDirectory() as root:
+            with patch.object(settings, "private_upload_dir", root):
+                target = Path(root) / "target"
+                target.write_bytes(b"private")
+                (Path(root) / ("a" * 32)).symlink_to(target)
+                with self.assertRaises(OSError):
+                    storage.get_download_path("a" * 32)
+
     async def test_rejects_empty_file(self):
         with tempfile.TemporaryDirectory() as root:
             with patch.object(settings, "private_upload_dir", root):
                 file = UploadFile(file=BytesIO(b""), filename="empty.pdf")
                 with self.assertRaises(ValueError):
+                    await storage.save(file)
+                self.assertEqual(list(Path(root).iterdir()), [])
+
+    async def test_read_failure_removes_partial_file(self):
+        class FailingFile(BytesIO):
+            def read(self, size=-1):
+                if self.tell():
+                    raise OSError("simulated read failure")
+                return super().read(3)
+
+        with tempfile.TemporaryDirectory() as root:
+            with patch.object(settings, "private_upload_dir", root):
+                file = UploadFile(file=FailingFile(b"private content"), filename="x.pdf")
+                with self.assertRaisesRegex(OSError, "simulated read failure"):
                     await storage.save(file)
                 self.assertEqual(list(Path(root).iterdir()), [])

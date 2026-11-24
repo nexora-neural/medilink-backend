@@ -70,7 +70,12 @@ async def delete(key: str) -> None:
 
 def get_download_path(key: str) -> Path:
     path = _path(key)
-    mode = path.lstat().st_mode
-    if not stat.S_ISREG(mode):
-        raise OSError("Stored document is not a regular file")
+    # Opening also detects unreadable files; lstat alone only proves existence.
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    fd = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode) or path.is_symlink():
+            raise OSError("Stored document is not a regular file")
+    finally:
+        os.close(fd)
     return path

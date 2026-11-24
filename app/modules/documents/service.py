@@ -536,6 +536,7 @@ async def upload_document(
             )
 
     key = None
+    commit_started = False
 
     try:
         key, byte_size, digest = await storage.save(upload)
@@ -599,20 +600,29 @@ async def upload_document(
 
         await db.flush()
         await db.refresh(doc)
+        # A failed commit can have succeeded on the server before the connection
+        # was lost. Never delete its file until the database state is known.
+        commit_started = True
         await db.commit()
 
         return doc
 
     except Exception:
-        await db.rollback()
+        try:
+            await db.rollback()
+        except Exception:
+            logger.exception("Could not roll back failed document upload")
 
-        if key is not None:
+        if key is not None and not commit_started:
             try:
                 await storage.delete(key)
             except OSError:
                 logger.exception(
                     "Could not clean up failed private document upload"
                 )
+
+        if key is not None and commit_started:
+            logger.warning("Document upload commit outcome unknown; reconciliation required")
 
         raise
 
