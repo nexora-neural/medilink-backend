@@ -121,6 +121,7 @@ async def _publish_report(db, actor, patient_id, body, key, request_id):
 
     if (
         document is None
+        or document.supersedes_id is not None
         or document.owner_user_id != patient_id
         or document.patient_user_id != patient_id
         or document.uploaded_by != actor.id

@@ -144,3 +144,4 @@ class Report(Base):
         PG_UUID(as_uuid=True), ForeignKey("reports.id", ondelete="RESTRICT")
     )
     correction_reason: Mapped[str | None] = mapped_column(Text)
+    withdrawal_reason: Mapped[str | None] = mapped_column(Text)

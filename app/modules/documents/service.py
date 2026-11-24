@@ -325,11 +325,13 @@ async def upload_document(
         patient_id is None
         or patient_id == user.id
         or document_type != "report"
-        or upload_request_id is None
-        or supersedes_id is not None
+        or (upload_request_id is None) == (supersedes_id is None)
         or correction_reason is not None
     ):
-        _reject(422, "VALIDATION_ERROR", "Only an initial laboratory report can be staged.")
+        _reject(
+            422, "VALIDATION_ERROR",
+            "Stage an initial laboratory report or an authorized correction.",
+        )
 
     if document_type not in ALLOWED_TYPES:
         _reject(
@@ -528,7 +530,7 @@ async def upload_document(
         )
 
         # Corrected 409 API contract error code
-        if replacement_exists:
+        if replacement_exists and not stage_for_report:
             _reject(
                 409,
                 "INVALID_STATE",
@@ -577,7 +579,7 @@ async def upload_document(
                 correction_reason=correction_reason,
             )
 
-        if previous is not None:
+        if previous is not None and not stage_for_report:
             previous.status = DocumentStatus.SUPERSEDED
 
         if parent is not None:
