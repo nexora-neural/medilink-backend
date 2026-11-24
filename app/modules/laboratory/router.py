@@ -1,9 +1,10 @@
 """ML-104 patient lab upload request routes."""
 
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
@@ -16,7 +17,9 @@ from app.modules.identity.request_limits import (
     require_authenticated_rate_limit,
     require_resolution_rate_limit,
 )
-from app.modules.laboratory import service
+from app.modules.laboratory import report_service, service
+from app.modules.laboratory.models import ReportStatus
+from app.modules.laboratory.report_schemas import ReportInput, ReportsRead, ReportsReadPage
 from app.modules.laboratory.schemas import (
     LabUploadRequestCreate,
     LabUploadRequestCreated,
@@ -138,4 +141,58 @@ async def resolve_lab_upload_request(
 ) -> LabUploadRequestResolved:
     return await service.resolve_request(
         db, actor, body.laboratory_id, body.request_token, request.state.request_id
+    )
+
+@router.post(
+    "/patients/{patient_id}/reports", response_model=ReportsRead, status_code=201,
+    dependencies=[Depends(require_authenticated_rate_limit)],
+)
+async def publish_report(
+    patient_id: UUID, body: ReportInput, request: Request, db: DB, actor: Actor,
+    key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
+) -> ReportsRead:
+    return await report_service.publish_report(
+        db, actor, patient_id, body, key, request.state.request_id,
+    )
+
+
+@router.get(
+    "/patients/{patient_id}/reports", response_model=ReportsReadPage,
+    dependencies=[Depends(require_authenticated_rate_limit)],
+)
+async def list_patient_reports(
+    patient_id: UUID, db: DB, actor: Actor,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    from_at: Annotated[datetime | None, Query(alias="from")] = None,
+    to_at: Annotated[datetime | None, Query(alias="to")] = None,
+    status: ReportStatus | None = None,
+) -> ReportsReadPage:
+    return await report_service.list_patient_reports(
+        db, actor, patient_id,
+        page=page, page_size=page_size, from_at=from_at, to_at=to_at, status=status,
+    )
+
+
+@router.get(
+    "/reports/{report_id}", response_model=ReportsRead,
+    dependencies=[Depends(require_authenticated_rate_limit)],
+)
+async def get_report(report_id: UUID, db: DB, actor: Actor) -> ReportsRead:
+    return await report_service.get_report(db, actor, report_id)
+
+
+@router.get(
+    "/me/laboratory-reports", response_model=ReportsReadPage,
+    dependencies=[Depends(require_authenticated_rate_limit)],
+)
+async def list_laboratory_reports(
+    db: DB, actor: Actor,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    from_at: Annotated[datetime | None, Query(alias="from")] = None,
+    to_at: Annotated[datetime | None, Query(alias="to")] = None,
+) -> ReportsReadPage:
+    return await report_service.list_laboratory_reports(
+        db, actor, page=page, page_size=page_size, from_at=from_at, to_at=to_at,
     )

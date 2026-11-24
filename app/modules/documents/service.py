@@ -28,6 +28,7 @@ from app.modules.laboratory.models import (
     ReportStatus,
     UploadRequestStatus,
 )
+from app.modules.laboratory.report_notifications import notify_report_accepted
 from app.modules.profiles.models import PatientProfile, ProfessionalProfile
 from app.modules.verification.models import VerificationApplicationDocument
 
@@ -235,6 +236,10 @@ async def _persist_lab_report(
 
         req.status = UploadRequestStatus.USED
         req.used_at = now
+        await db.flush()
+        await notify_report_accepted(
+            db, patient_id=patient_id, report_id=report.id,
+        )
         return
 
     if supersedes_id is None:
@@ -292,6 +297,13 @@ async def _persist_lab_report(
     db.add(replacement)
     previous_report.status = ReportStatus.SUPERSEDED
 
+    await db.flush()
+    await notify_report_accepted(
+        db,
+        patient_id=previous_report.patient_user_id,
+        report_id=replacement.id,
+    )
+
 
 async def upload_document(
     db: AsyncSession,
@@ -306,7 +318,18 @@ async def upload_document(
     verification_application_id: UUID | None = None,
     supersedes_id: UUID | None = None,
     correction_reason: str | None = None,
+    stage_for_report: bool = False,
 ) -> Document:
+
+    if stage_for_report and (
+        patient_id is None
+        or patient_id == user.id
+        or document_type != "report"
+        or upload_request_id is None
+        or supersedes_id is not None
+        or correction_reason is not None
+    ):
+        _reject(422, "VALIDATION_ERROR", "Only an initial laboratory report can be staged.")
 
     if document_type not in ALLOWED_TYPES:
         _reject(
@@ -524,6 +547,7 @@ async def upload_document(
             uploaded_by=user.id,
             source=source,
             document_type=document_type,
+            staged_report_request_id=upload_request_id if stage_for_report else None,
             original_filename=Path(
                 upload.filename or "document"
             ).name[:255],
@@ -541,6 +565,7 @@ async def upload_document(
                 patient_id is not None
                 and user.id != patient_id
                 and document_type == "report"
+                and not stage_for_report
         ):
             await _persist_lab_report(
                 db,

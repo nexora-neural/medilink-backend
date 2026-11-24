@@ -38,6 +38,7 @@ async def upload_patient_document(
     verification_application_id: Annotated[UUID | None, Form()] = None,
     supersedes_id: Annotated[UUID | None, Form()] = None,
     correction_reason: Annotated[str | None, Form()] = None,
+    stage_for_report: Annotated[bool, Form()] = False,
 ):
     media_type = await _validate(request, file)
     if isinstance(media_type, JSONResponse):
@@ -54,6 +55,7 @@ async def upload_patient_document(
         verification_application_id=verification_application_id,
         supersedes_id=supersedes_id,
         correction_reason=correction_reason,
+        stage_for_report=stage_for_report,
     )
 
 

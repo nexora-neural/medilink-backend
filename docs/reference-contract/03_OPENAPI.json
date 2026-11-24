@@ -12043,7 +12043,7 @@
           "Laboratory"
         ],
         "summary": "Publish patient/lab report",
-        "description": "Allowed actor: Patient: own record or Verified Lab Staff: active matching laboratory membership. Patient uploads own document without lab attribution. Lab requires active upload_request_id matching patient/lab/document; consumes request atomically, deduplicates lab reference and notifies patient.",
+        "description": "Allowed actor: Patient: own record or Verified Lab Staff: active matching laboratory membership. Patient uploads own document without lab attribution. Lab requires active upload_request_id matching patient/lab/document; consumes request atomically, deduplicates lab reference and notifies patient. Manual lab reports must first be uploaded with stage_for_report=true. The document must be active, owned by this patient, uploaded by the caller, and bound to this upload request. Publication, request consumption, notification, audit and idempotency success are atomic. Same-key/same-body retries replay the original 201 even after request consumption; changed body with that key returns 409 IDEMPOTENCY_CONFLICT. Another publication with an expired/revoked/used request or already-published document returns 409 INVALID_STATE. A missing or mismatched document returns 404 NOT_FOUND. A failed publication preserves the staged document and does not commit publication changes. Patient-source publication has no lab notification.",
         "security": [
           {
             "FirebaseBearer": []
@@ -13017,7 +13017,7 @@
           "Documents"
         ],
         "summary": "Upload private patient file",
-        "description": "Allowed actor: Patient: own record or Verified Lab Staff: active matching laboratory membership. Lab requires active matching upload request, or supersedes_id from authorized lab correction. PDFs/JPEG/PNG <=10 MiB; file bytes validated. Lab cannot upload arbitrary patient files.",
+        "description": "Allowed actor: Patient: own record or Verified Lab Staff: active matching laboratory membership. Lab requires active matching upload request, or supersedes_id from authorized lab correction. PDFs/JPEG/PNG <=10 MiB; file bytes validated. Lab cannot upload arbitrary patient files. ML-116: stage_for_report defaults to false. For an initial laboratory upload, false publishes immediately, consumes the request and notifies the patient; do not publish again. True stores a staged document bound to upload_request_id without consuming the request or notifying the patient. Publish that document using the reports endpoint with the same request and a lab_reference. Patient self-uploads must use false and publish without laboratory fields. Corrections cannot be staged.",
         "security": [
           {
             "FirebaseBearer": []
@@ -13152,7 +13152,7 @@
           "content": {
             "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/DocumentUpload"
+                "$ref": "#/components/schemas/PatientDocumentUpload"
               }
             }
           }
@@ -23129,6 +23129,48 @@
           "total"
         ]
       },
+      "PatientDocumentUpload": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary"
+          },
+          "document_type": {
+            "type": "string",
+            "enum": [
+              "prescription",
+              "report",
+              "verification_evidence"
+            ]
+          },
+          "upload_request_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "verification_application_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "supersedes_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stage_for_report": {
+            "type": "boolean",
+            "default": false,
+            "description": "Only initial laboratory reports may be staged. True stores the document without publication, request consumption or patient notification."
+          },
+          "correction_reason": {
+            "type": "string",
+            "description": "Required for a laboratory report correction with supersedes_id; must be absent when stage_for_report=true."
+          }
+        },
+        "required": [
+          "file",
+          "document_type"
+        ]
       "BackupRead": {
         "additionalProperties": false,
         "properties": {
