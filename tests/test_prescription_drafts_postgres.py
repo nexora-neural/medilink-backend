@@ -6,20 +6,25 @@ from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, skipUnless
 from uuid import uuid4
 
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.database import models as _models  # noqa: F401
+from app.database.session import get_session
 from app.modules.audit.models import AuditEvent
 from app.modules.consent.models import AccessGrant, GrantCategory
 from app.modules.consultations.models import Consultation
-from app.modules.identity.auth import AuthenticationError
+from app.modules.documents.models import Document
+from app.modules.identity.auth import AuthenticationError, get_current_user
 from app.modules.identity.models import Role, User, UserRole
 from app.modules.organizations.models import Organization, OrganizationMembership
 from app.modules.prescriptions import repository, service
 from app.modules.prescriptions.access import require_prescription_access
 from app.modules.prescriptions.core_models import Prescription, PrescriptionItem
+from app.modules.prescriptions.router import router
 from app.modules.prescriptions.schemas import PrescriptionInput
 from app.modules.profiles.models import PatientProfile, ProfessionalProfile
 
@@ -452,3 +457,116 @@ class PrescriptionDraftPostgresTests(IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(caught.exception.status_code, 403)
+
+    async def test_http_patient_draft_crud(self):
+        app = FastAPI()
+        app.include_router(router, prefix="/api/v1")
+
+        async def test_session():
+            yield self.db
+
+        async def test_user():
+            return self.patient
+
+        app.dependency_overrides[get_session] = test_session
+        app.dependency_overrides[get_current_user] = test_user
+
+        @app.middleware("http")
+        async def request_id_middleware(request, call_next):
+            request.state.request_id = str(uuid4())
+            return await call_next(request)
+
+        transport = ASGITransport(app=app)
+
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            collection_url = f"/api/v1/patients/{self.patient_id}/prescriptions"
+            body = self.payload().model_dump(mode="json")
+
+            # 1. Create a draft.
+            response = await client.post(collection_url, json=body)
+            self.assertEqual(response.status_code, 201, response.text)
+            created = response.json()
+            draft_id = created["prescription"]["id"]
+            version = created["prescription"]["version"]
+
+            self.assertEqual(created["prescription"]["source"], "patient")
+            self.assertEqual(created["prescription"]["status"], "draft")
+            self.assertEqual(len(created["items"]), 1)
+
+            detail_url = f"/api/v1/prescriptions/{draft_id}"
+
+            # 2. Read the draft.
+            response = await client.get(detail_url)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["prescription"]["id"], draft_id)
+
+            # 3. Find it in the filtered list.
+            response = await client.get(
+                collection_url,
+                params={"status": "draft", "source": "patient"},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            page = response.json()
+            self.assertEqual(page["total"], 1)
+            self.assertEqual(page["items"][0]["prescription"]["id"], draft_id)
+
+            # 4. Replace the draft using its current version.
+            body["items"][0]["instructions"] = "Updated synthetic instructions."
+            response = await client.put(
+                f"{detail_url}/draft",
+                json=body,
+                headers={"If-Match": str(version)},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            updated = response.json()
+            self.assertEqual(updated["prescription"]["version"], version + 1)
+            self.assertEqual(
+                updated["items"][0]["instructions"],
+                "Updated synthetic instructions.",
+            )
+
+            # 5. Delete the unreferenced draft.
+            response = await client.delete(f"{detail_url}/draft")
+            self.assertEqual(response.status_code, 204, response.text)
+            self.assertEqual(response.content, b"")
+
+            # 6. Confirm it disappeared from the list.
+            response = await client.get(collection_url)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["total"], 0)
+
+    async def test_delete_draft_retains_original_document(self):
+        document = Document(
+            owner_user_id=self.patient_id,
+            patient_user_id=self.patient_id,
+            uploaded_by=self.patient_id,
+            source="patient",
+            document_type="prescription",
+            original_filename="synthetic.pdf",
+            storage_key=str(uuid4()),
+            media_type="application/pdf",
+            byte_size=42,
+        )
+        self.db.add(document)
+        await self.db.flush()
+        document_id = document.id
+
+        payload = self.payload().model_copy(update={"original_document_id": document_id})
+        draft = await repository.create_prescription_draft(
+            self.db,
+            patient_id=self.patient_id,
+            actor_id=self.patient_id,
+            source="patient",
+            payload=payload,
+        )
+        draft_id = draft.id
+
+        await repository.delete_draft_rows(self.db, draft_id)
+
+        self.db.expire_all()
+
+        self.assertIsNone(await repository.find_prescription(self.db, draft_id))
+        self.assertIsNotNone(await self.db.get(Document, document_id))
