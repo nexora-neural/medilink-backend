@@ -11,6 +11,7 @@ from pydantic import (
     ConfigDict,
     Field,
     field_validator,
+    model_validator,
 )
 
 
@@ -78,6 +79,33 @@ class PrescriptionItemInput(BaseModel):
     quantity_unit: Literal["tablet", "capsule", "mL"] | None = None
     is_prn: bool
 
+    @field_validator(
+        "medicine_name_snapshot",
+        "dose_text",
+        "frequency",
+    )
+    @classmethod
+    def required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Value must not be blank.")
+        return value
+
+    @field_validator("route", "instructions")
+    @classmethod
+    def optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+    @model_validator(mode="after")
+    def quantity_pair(self):
+        if (self.quantity is None) != (self.quantity_unit is None):
+            raise ValueError(
+                "quantity and quantity_unit must be supplied together."
+            )
+        return self
+
 
 class PrescriptionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -89,6 +117,22 @@ class PrescriptionInput(BaseModel):
     original_document_id: UUID | None = None
     items: list[PrescriptionItemInput]
 
+    @field_validator("claimed_prescriber")
+    @classmethod
+    def clean_claimed_prescriber(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+    @model_validator(mode="after")
+    def date_order(self):
+        if (
+            self.starts_on is not None
+            and self.ends_on is not None
+            and self.ends_on < self.starts_on
+        ):
+            raise ValueError("ends_on must be on or after starts_on.")
+        return self
 
 class PrescriptionRecordRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
