@@ -1,12 +1,13 @@
-﻿"""Database access methods for prescriptions and OCR workflow."""
+"""Database access methods for prescriptions and OCR workflow."""
 
 from uuid import UUID
+
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.medication.models import MedicationSchedule
 from app.modules.prescriptions.core_models import Medicine, Prescription, PrescriptionItem
-from app.modules.prescriptions.schemas import MedicineInput , PrescriptionInput
+from app.modules.prescriptions.schemas import MedicineInput, PrescriptionInput
 
 
 async def get_medicines(
@@ -125,9 +126,7 @@ async def delete_prescription_items(
     from sqlalchemy import delete
 
     await session.execute(
-        delete(PrescriptionItem).where(
-            PrescriptionItem.prescription_id == prescription_id
-        )
+        delete(PrescriptionItem).where(PrescriptionItem.prescription_id == prescription_id)
     )
 
 
@@ -160,6 +159,7 @@ async def create_prescription_items(
         await session.refresh(record)
     return records
 
+
 async def find_prescription(
     session: AsyncSession,
     prescription_id: UUID,
@@ -188,11 +188,7 @@ async def list_patient_prescriptions(
     if source is not None:
         filters.append(Prescription.source == source)
 
-    total = await session.scalar(
-        select(func.count())
-        .select_from(Prescription)
-        .where(*filters)
-    )
+    total = await session.scalar(select(func.count()).select_from(Prescription).where(*filters))
 
     rows = await session.scalars(
         select(Prescription)
@@ -221,14 +217,10 @@ async def create_prescription_draft(
 
     prescription = Prescription(
         patient_user_id=patient_id,
-        consultation_id=(
-            payload.consultation_id if source == "doctor" else None
-        ),
+        consultation_id=(payload.consultation_id if source == "doctor" else None),
         prescriber_user_id=actor_id if source == "doctor" else None,
         source=source,
-        claimed_prescriber=(
-            payload.claimed_prescriber if source == "patient" else None
-        ),
+        claimed_prescriber=(payload.claimed_prescriber if source == "patient" else None),
         review_status="not_reviewed",
         status="draft",
         starts_on=payload.starts_on,
@@ -250,6 +242,7 @@ async def create_prescription_draft(
     await session.refresh(prescription)
     return prescription
 
+
 async def delete_draft_rows(
     session: AsyncSession,
     prescription_id: UUID,
@@ -259,9 +252,5 @@ async def delete_draft_rows(
 
     await delete_prescription_items(session, prescription_id)
 
-    await session.execute(
-        delete(Prescription).where(
-            Prescription.id == prescription_id
-        )
-    )
+    await session.execute(delete(Prescription).where(Prescription.id == prescription_id))
     await session.flush()

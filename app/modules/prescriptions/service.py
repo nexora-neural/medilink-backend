@@ -2,12 +2,14 @@
 
 from datetime import UTC, datetime
 from uuid import UUID
+
 from fastapi import Request
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.audit.service import append_event
+from app.modules.documents.models import Document
 from app.modules.identity.auth import AuthenticationError
 from app.modules.identity.models import User
 from app.modules.identity.repository import get_roles
@@ -15,13 +17,14 @@ from app.modules.organizations.models import (
     Organization,
     OrganizationMembership,
 )
-from app.modules.prescriptions.access import require_prescription_access
 from app.modules.prescriptions import repository
+from app.modules.prescriptions.access import require_prescription_access
 from app.modules.prescriptions.core_models import (
-    PrescriptionReviewStatus,
-    PrescriptionStatus,
+    Medicine,
     Prescription,
     PrescriptionItem,
+    PrescriptionReviewStatus,
+    PrescriptionStatus,
 )
 from app.modules.prescriptions.review_models import PrescriptionReview
 from app.modules.prescriptions.schemas import (
@@ -29,13 +32,10 @@ from app.modules.prescriptions.schemas import (
     MedicinesRead,
     MedicinesReadPage,
     PrescriptionDetail,
-    PrescriptionInput,
     PrescriptionDetailPage,
+    PrescriptionInput,
 )
 from app.modules.profiles.models import ProfessionalProfile
-
-from app.modules.documents.models import Document
-from app.modules.prescriptions.core_models import Medicine
 
 
 def forbidden(request: Request) -> AuthenticationError:
@@ -228,8 +228,6 @@ async def replace_prescription_draft(
 ) -> PrescriptionDetail:
     """Replace a draft prescription using an atomic version check."""
 
-
-
     try:
         prescription = await repository.lock_prescription(
             session,
@@ -249,14 +247,8 @@ async def replace_prescription_draft(
 
         source = getattr(prescription.source, "value", prescription.source)
 
-        is_patient_owner = (
-                source == "patient"
-                and prescription.patient_user_id == user.id
-        )
-        is_doctor_owner = (
-                source == "doctor"
-                and prescription.prescriber_user_id == user.id
-        )
+        is_patient_owner = source == "patient" and prescription.patient_user_id == user.id
+        is_doctor_owner = source == "doctor" and prescription.prescriber_user_id == user.id
 
         if not (is_patient_owner or is_doctor_owner):
             raise forbidden(request)
@@ -297,10 +289,7 @@ async def replace_prescription_draft(
                 },
             )
 
-        if (
-                prescription.status != PrescriptionStatus.DRAFT
-                or prescription.issued_at is not None
-        ):
+        if prescription.status != PrescriptionStatus.DRAFT or prescription.issued_at is not None:
             raise AuthenticationError(
                 status_code=409,
                 detail={
@@ -321,9 +310,7 @@ async def replace_prescription_draft(
                 detail={
                     "code": "VALIDATION_ERROR",
                     "message": "ends_on must be on or after starts_on.",
-                    "field_errors": {
-                        "ends_on": ["Must be on or after starts_on."]
-                    },
+                    "field_errors": {"ends_on": ["Must be on or after starts_on."]},
                     "request_id": request.state.request_id,
                 },
             )
@@ -349,9 +336,7 @@ async def replace_prescription_draft(
             payload=payload,
         )
 
-        prescription.consultation_id = (
-            payload.consultation_id if source == "doctor" else None
-        )
+        prescription.consultation_id = payload.consultation_id if source == "doctor" else None
         prescription.claimed_prescriber = (
             payload.claimed_prescriber if source == "patient" else None
         )
@@ -421,9 +406,7 @@ async def build_prescription_detail(
         (
             await session.scalars(
                 select(PrescriptionItem)
-                .where(
-                    PrescriptionItem.prescription_id == prescription.id
-                )
+                .where(PrescriptionItem.prescription_id == prescription.id)
                 .order_by(
                     PrescriptionItem.created_at,
                     PrescriptionItem.id,
@@ -436,9 +419,7 @@ async def build_prescription_detail(
         (
             await session.scalars(
                 select(PrescriptionReview)
-                .where(
-                    PrescriptionReview.prescription_id == prescription.id
-                )
+                .where(PrescriptionReview.prescription_id == prescription.id)
                 .order_by(
                     PrescriptionReview.reviewed_at,
                     PrescriptionReview.id,
@@ -516,9 +497,7 @@ async def list_prescriptions(
 
     details = []
     for prescription in prescriptions:
-        details.append(
-            await build_prescription_detail(session, prescription)
-        )
+        details.append(await build_prescription_detail(session, prescription))
 
     return PrescriptionDetailPage(
         items=details,
@@ -526,6 +505,7 @@ async def list_prescriptions(
         page_size=page_size,
         total=total,
     )
+
 
 async def validate_draft_references(
     session: AsyncSession,
@@ -548,8 +528,7 @@ async def validate_draft_references(
         )
 
         if document is None or (
-            document.patient_user_id is not None
-            and document.patient_user_id != patient_id
+            document.patient_user_id is not None and document.patient_user_id != patient_id
         ):
             raise AuthenticationError(
                 status_code=422,
@@ -558,21 +537,14 @@ async def validate_draft_references(
                     "message": "Please check the highlighted fields.",
                     "field_errors": {
                         "original_document_id": [
-                            "Select an active prescription document "
-                            "owned by this patient."
+                            "Select an active prescription document owned by this patient."
                         ]
                     },
-                    "request_id": getattr(
-                        request.state, "request_id", ""
-                    ),
+                    "request_id": getattr(request.state, "request_id", ""),
                 },
             )
 
-    medicine_ids = {
-        item.medicine_id
-        for item in payload.items
-        if item.medicine_id is not None
-    }
+    medicine_ids = {item.medicine_id for item in payload.items if item.medicine_id is not None}
 
     if medicine_ids:
         existing_ids = set(
@@ -592,14 +564,8 @@ async def validate_draft_references(
                 detail={
                     "code": "VALIDATION_ERROR",
                     "message": "Please check the highlighted fields.",
-                    "field_errors": {
-                        "items": [
-                            "One or more selected medicines are unavailable."
-                        ]
-                    },
-                    "request_id": getattr(
-                        request.state, "request_id", ""
-                    ),
+                    "field_errors": {"items": ["One or more selected medicines are unavailable."]},
+                    "request_id": getattr(request.state, "request_id", ""),
                 },
             )
 
@@ -647,7 +613,7 @@ async def create_draft(
             request_id=getattr(request.state, "request_id", ""),
             metadata={
                 "source": source,
-                "version": prescription.version,
+                "new_version": prescription.version,
                 "item_count": len(payload.items),
             },
         )
@@ -663,6 +629,7 @@ async def create_draft(
     except Exception:
         await session.rollback()
         raise
+
 
 async def delete_draft(
     *,
@@ -690,18 +657,10 @@ async def delete_draft(
                 },
             )
 
-        source = getattr(
-            prescription.source, "value", prescription.source
-        )
+        source = getattr(prescription.source, "value", prescription.source)
 
-        patient_owner = (
-            source == "patient"
-            and prescription.patient_user_id == user.id
-        )
-        doctor_owner = (
-            source == "doctor"
-            and prescription.prescriber_user_id == user.id
-        )
+        patient_owner = source == "patient" and prescription.patient_user_id == user.id
+        doctor_owner = source == "doctor" and prescription.prescriber_user_id == user.id
 
         if not (patient_owner or doctor_owner):
             raise forbidden(request)
@@ -718,10 +677,7 @@ async def delete_draft(
         if authorized_source != source:
             raise forbidden(request)
 
-        if (
-            prescription.status != PrescriptionStatus.DRAFT
-            or prescription.issued_at is not None
-        ):
+        if prescription.status != PrescriptionStatus.DRAFT or prescription.issued_at is not None:
             raise AuthenticationError(
                 status_code=409,
                 detail={
@@ -741,10 +697,7 @@ async def delete_draft(
                 deleted_id,
             )
         except IntegrityError as exc:
-            sqlstate = (
-                getattr(exc.orig, "sqlstate", None)
-                or getattr(exc.orig, "pgcode", None)
-            )
+            sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
             if sqlstate != "23503":
                 raise
 
@@ -752,9 +705,7 @@ async def delete_draft(
                 status_code=409,
                 detail={
                     "code": "INVALID_STATE",
-                    "message": (
-                        "This draft has linked records and cannot be deleted."
-                    ),
+                    "message": ("This draft has linked records and cannot be deleted."),
                     "field_errors": {},
                     "request_id": request_id,
                 },
@@ -770,7 +721,7 @@ async def delete_draft(
             request_id=request_id,
             metadata={
                 "source": source,
-                "version": deleted_version,
+                "previous_version": deleted_version,
             },
         )
 

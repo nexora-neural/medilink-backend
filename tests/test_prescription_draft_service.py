@@ -15,9 +15,7 @@ from app.modules.prescriptions.schemas import PrescriptionInput
 class PrescriptionDraftServiceTests(IsolatedAsyncioTestCase):
     def setUp(self):
         self.user = SimpleNamespace(id=uuid4())
-        self.request = SimpleNamespace(
-            state=SimpleNamespace(request_id="test-prescription")
-        )
+        self.request = SimpleNamespace(state=SimpleNamespace(request_id="test-prescription"))
         self.session = SimpleNamespace(
             commit=AsyncMock(),
             rollback=AsyncMock(),
@@ -51,9 +49,7 @@ class PrescriptionDraftServiceTests(IsolatedAsyncioTestCase):
                 "delete_draft_rows",
                 AsyncMock(),
             ) as delete_rows,
-            patch.object(
-                service, "append_event", AsyncMock()
-            ) as audit,
+            patch.object(service, "append_event", AsyncMock()) as audit,
         ):
             await service.delete_draft(
                 session=self.session,
@@ -62,9 +58,7 @@ class PrescriptionDraftServiceTests(IsolatedAsyncioTestCase):
                 prescription_id=self.prescription.id,
             )
 
-        delete_rows.assert_awaited_once_with(
-            self.session, self.prescription.id
-        )
+        delete_rows.assert_awaited_once_with(self.session, self.prescription.id)
         self.assertEqual(
             audit.await_args.kwargs["action"],
             "prescription.draft.deleted",
@@ -137,9 +131,7 @@ class PrescriptionDraftServiceTests(IsolatedAsyncioTestCase):
         class ForeignKeyViolation(Exception):
             sqlstate = "23503"
 
-        error = IntegrityError(
-            "DELETE", {}, ForeignKeyViolation()
-        )
+        error = IntegrityError("DELETE", {}, ForeignKeyViolation())
 
         with (
             patch.object(
@@ -157,9 +149,7 @@ class PrescriptionDraftServiceTests(IsolatedAsyncioTestCase):
                 "delete_draft_rows",
                 AsyncMock(side_effect=error),
             ),
-            patch.object(
-                service, "append_event", AsyncMock()
-            ) as audit,
+            patch.object(service, "append_event", AsyncMock()) as audit,
         ):
             with self.assertRaises(AuthenticationError) as caught:
                 await service.delete_draft(
@@ -236,9 +226,7 @@ class PrescriptionDraftServiceTests(IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(caught.exception.status_code, 409)
-        self.assertEqual(
-            caught.exception.detail["code"], "STALE_VERSION"
-        )
+        self.assertEqual(caught.exception.detail["code"], "STALE_VERSION")
         delete_items.assert_not_awaited()
         self.session.commit.assert_not_awaited()
         self.session.rollback.assert_awaited_once()

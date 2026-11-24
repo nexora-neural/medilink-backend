@@ -64,9 +64,7 @@ async def prescription_grants(
             Consultation.id == consultation_id,
             Consultation.patient_user_id == patient_id,
             Consultation.doctor_user_id == actor_id,
-            Consultation.organization_id.is_not_distinct_from(
-                AccessGrant.organization_id
-            ),
+            Consultation.organization_id.is_not_distinct_from(AccessGrant.organization_id),
             Consultation.ended_at.is_(None),
             AccessGrant.allow_consultation.is_(True),
         )
@@ -93,9 +91,7 @@ async def require_prescription_access(
     """Return the authorized source; leave transaction control to the caller."""
 
     actor_status = await session.scalar(
-        select(User.status)
-        .where(User.id == user.id)
-        .with_for_update(read=True)
+        select(User.status).where(User.id == user.id).with_for_update(read=True)
     )
     if actor_status != "active":
         deny_access(request)
@@ -157,9 +153,7 @@ async def require_prescription_access(
             continue
 
         # Evaluate expiry after acquiring the authorization locks.
-        now: datetime = await session.scalar(
-            select(func.clock_timestamp())
-        )
+        now: datetime = await session.scalar(select(func.clock_timestamp()))
         if not (grant.starts_at <= now < grant.expires_at):
             continue
 

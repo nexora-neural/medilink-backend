@@ -1,10 +1,9 @@
-
 """API router for prescriptions, OCR workflow, and medicine catalogue."""
 
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Query, Request, status, Response
+from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,8 +17,8 @@ from app.modules.prescriptions.schemas import (
     MedicinesRead,
     MedicinesReadPage,
     PrescriptionDetail,
-    PrescriptionInput,
     PrescriptionDetailPage,
+    PrescriptionInput,
 )
 
 router = APIRouter(tags=["Prescriptions"])
@@ -46,15 +45,9 @@ async def get_medicines(
     request: Request,
     session: SessionDep,
     current_user: UserDep,
-    q: Annotated[
-        str | None, Query(max_length=200)
-    ] = None,
-    page: Annotated[
-        int, Query(ge=1)
-    ] = 1,
-    page_size: Annotated[
-        int, Query(ge=1, le=100)
-    ] = 20,
+    q: Annotated[str | None, Query(max_length=200)] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> MedicinesReadPage:
     unknown = set(request.query_params) - {"q", "page", "page_size"}
     if unknown:
@@ -76,6 +69,7 @@ async def get_medicines(
         page_size=page_size,
     )
 
+
 @medicine_router.get(
     "/admin/medicines",
     response_model=MedicinesReadPage,
@@ -95,6 +89,7 @@ async def get_admin_medicines(
         page=page,
         page_size=page_size,
     )
+
 
 @medicine_router.post(
     "/admin/medicines",
@@ -116,7 +111,6 @@ async def create_medicine(
         request=request,
         payload=payload,
     )
-
 
 
 @router.put(
@@ -224,6 +218,7 @@ async def get_prescription(
         prescription_id=prescription_id,
     )
 
+
 @router.post(
     "/patients/{patient_id}/prescriptions",
     response_model=PrescriptionDetail,
@@ -247,6 +242,7 @@ async def create_patient_prescription(
         patient_id=patient_id,
         payload=payload,
     )
+
 
 @router.delete(
     "/prescriptions/{prescription_id}/draft",

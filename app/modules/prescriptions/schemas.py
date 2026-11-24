@@ -1,5 +1,4 @@
-﻿"""Pydantic request and response schemas for prescriptions and OCR workflow."""
-
+"""Pydantic request and response schemas for prescriptions and OCR workflow."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -25,9 +24,7 @@ class MedicineInput(BaseModel):
     strength: str | None = Field(default=None, max_length=100)
     form: str | None = Field(default=None, max_length=100)
 
-    @field_validator(
-        "generic_name", "brand_name", "strength", "form"
-    )
+    @field_validator("generic_name", "brand_name", "strength", "form")
     @classmethod
     def validate_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -63,7 +60,9 @@ class MedicinesReadPage(BaseModel):
     page_size: int
     total: int
 
+
 # ML-112 prescription draft editing schemas
+
 
 class PrescriptionItemInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -101,9 +100,7 @@ class PrescriptionItemInput(BaseModel):
     @model_validator(mode="after")
     def quantity_pair(self):
         if (self.quantity is None) != (self.quantity_unit is None):
-            raise ValueError(
-                "quantity and quantity_unit must be supplied together."
-            )
+            raise ValueError("quantity and quantity_unit must be supplied together.")
         return self
 
 
@@ -133,6 +130,7 @@ class PrescriptionInput(BaseModel):
         ):
             raise ValueError("ends_on must be on or after starts_on.")
         return self
+
 
 class PrescriptionRecordRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)

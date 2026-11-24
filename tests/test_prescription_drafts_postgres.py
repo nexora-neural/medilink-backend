@@ -1,0 +1,454 @@
+"""Real PostgreSQL checks for prescription draft persistence."""
+
+import os
+from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
+from unittest import IsolatedAsyncioTestCase, skipUnless
+from uuid import uuid4
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
+from app.database import models as _models  # noqa: F401
+from app.modules.audit.models import AuditEvent
+from app.modules.consent.models import AccessGrant, GrantCategory
+from app.modules.consultations.models import Consultation
+from app.modules.identity.auth import AuthenticationError
+from app.modules.identity.models import Role, User, UserRole
+from app.modules.organizations.models import Organization, OrganizationMembership
+from app.modules.prescriptions import repository, service
+from app.modules.prescriptions.access import require_prescription_access
+from app.modules.prescriptions.core_models import Prescription, PrescriptionItem
+from app.modules.prescriptions.schemas import PrescriptionInput
+from app.modules.profiles.models import PatientProfile, ProfessionalProfile
+
+TEST_DATABASE_URL = os.getenv("PRESCRIPTION_STORAGE_TEST_DATABASE_URL")
+
+
+@skipUnless(
+    TEST_DATABASE_URL,
+    "Set PRESCRIPTION_STORAGE_TEST_DATABASE_URL to a migrated test database",
+)
+class PrescriptionDraftPostgresTests(IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        engine = create_async_engine(TEST_DATABASE_URL)
+        self.addAsyncCleanup(engine.dispose)
+
+        connection = await engine.connect()
+        self.addAsyncCleanup(connection.close)
+
+        transaction = await connection.begin()
+        self.addAsyncCleanup(transaction.rollback)
+
+        self.db = AsyncSession(
+            bind=connection,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
+        )
+        self.addAsyncCleanup(self.db.close)
+
+        self.patient = User(
+            firebase_uid=str(uuid4()),
+            display_name="Synthetic draft patient",
+            status="active",
+        )
+        self.db.add(self.patient)
+        await self.db.flush()
+
+        self.db.add(
+            PatientProfile(
+                user_id=self.patient.id,
+                date_of_birth=date(1990, 1, 1),
+                sex="female",
+            )
+        )
+        await self.db.flush()
+
+        self.patient_id = self.patient.id
+
+        self.doctor = User(
+            firebase_uid=str(uuid4()),
+            display_name="Synthetic authorization doctor",
+            status="active",
+        )
+        self.db.add(self.doctor)
+        await self.db.flush()
+
+        for actor, code in (
+            (self.patient, "patient"),
+            (self.doctor, "doctor"),
+        ):
+            role = await self.db.scalar(select(Role).where(Role.code == code))
+            if role is None:
+                role = Role(code=code, label=f"Test {code}")
+                self.db.add(role)
+                await self.db.flush()
+
+            self.db.add(UserRole(user_id=actor.id, role_id=role.id))
+
+        self.db.add(
+            ProfessionalProfile(
+                user_id=self.doctor.id,
+                role="doctor",
+                doctor_reference=f"TEST-{uuid4()}",
+                verification_status="approved",
+            )
+        )
+        await self.db.flush()
+
+        now = datetime.now(UTC)
+        self.grant = AccessGrant(
+            patient_user_id=self.patient_id,
+            professional_user_id=self.doctor.id,
+            organization_id=None,
+            allow_consultation=True,
+            status="active",
+            starts_at=now - timedelta(hours=1),
+            expires_at=now + timedelta(hours=1),
+        )
+        self.db.add(self.grant)
+        await self.db.flush()
+
+        self.db.add(
+            GrantCategory(
+                grant_id=self.grant.id,
+                category="prescriptions",
+            )
+        )
+        self.consultation = Consultation(
+            patient_user_id=self.patient_id,
+            doctor_user_id=self.doctor.id,
+            organization_id=None,
+            grant_id=self.grant.id,
+            started_at=now - timedelta(minutes=10),
+        )
+        self.db.add(self.consultation)
+        await self.db.flush()
+
+        self.request = SimpleNamespace(state=SimpleNamespace(request_id=str(uuid4())))
+
+        # Release the setup savepoint; outer transaction still owns all data.
+        await self.db.commit()
+
+    def payload(self):
+        return PrescriptionInput(
+            items=[
+                {
+                    "medicine_name_snapshot": "Synthetic test medicine",
+                    "dose_text": "Synthetic dose",
+                    "route": "Oral",
+                    "frequency": "Synthetic frequency",
+                    "duration_days": 3,
+                    "quantity": "3",
+                    "quantity_unit": "tablet",
+                    "instructions": "Interface testing only.",
+                    "is_prn": False,
+                }
+            ]
+        )
+
+    async def create_draft(self):
+        return await repository.create_prescription_draft(
+            self.db,
+            patient_id=self.patient_id,
+            actor_id=self.patient_id,
+            source="patient",
+            payload=self.payload(),
+        )
+
+    async def test_create_persists_draft_and_items(self):
+        draft = await self.create_draft()
+        draft_id = draft.id
+        self.db.expire_all()
+
+        stored = await repository.find_prescription(self.db, draft_id)
+        items = list(
+            (
+                await self.db.scalars(
+                    select(PrescriptionItem).where(PrescriptionItem.prescription_id == draft_id)
+                )
+            ).all()
+        )
+
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored.source, "patient")
+        self.assertEqual(stored.status, "draft")
+        self.assertIsNone(stored.prescriber_user_id)
+        self.assertIsNone(stored.issued_at)
+        self.assertEqual(stored.version, 1)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].medicine_name_snapshot, "Synthetic test medicine")
+        self.assertEqual(items[0].quantity_unit, "tablet")
+
+    async def test_list_filters_and_paginates(self):
+        await self.create_draft()
+        await self.create_draft()
+
+        rows, total = await repository.list_patient_prescriptions(
+            self.db,
+            patient_id=self.patient_id,
+            page=1,
+            page_size=1,
+            status="draft",
+            source="patient",
+        )
+        next_rows, next_total = await repository.list_patient_prescriptions(
+            self.db,
+            patient_id=self.patient_id,
+            page=2,
+            page_size=1,
+            status="draft",
+            source="patient",
+        )
+        other_rows, other_total = await repository.list_patient_prescriptions(
+            self.db,
+            patient_id=uuid4(),
+            page=1,
+            page_size=20,
+        )
+
+        self.assertEqual(total, 2)
+        self.assertEqual(next_total, 2)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(next_rows), 1)
+        self.assertNotEqual(rows[0].id, next_rows[0].id)
+        self.assertEqual(other_rows, [])
+        self.assertEqual(other_total, 0)
+
+    async def test_delete_unreferenced_draft_removes_parent_and_items(self):
+        draft = await self.create_draft()
+        draft_id = draft.id
+
+        await repository.delete_draft_rows(self.db, draft_id)
+
+        stored = await repository.find_prescription(self.db, draft_id)
+        item_id = await self.db.scalar(
+            select(PrescriptionItem.id).where(PrescriptionItem.prescription_id == draft_id)
+        )
+
+        self.assertIsNone(stored)
+        self.assertIsNone(item_id)
+
+    async def test_linked_version_blocks_delete_and_restores_items(self):
+        original = await self.create_draft()
+        original_id = original.id
+
+        replacement = Prescription(
+            patient_user_id=self.patient_id,
+            source="patient",
+            created_by=self.patient_id,
+            previous_prescription_id=original_id,
+        )
+        self.db.add(replacement)
+        await self.db.flush()
+        replacement_id = replacement.id
+
+        # The exception must leave the nested transaction before recovery.
+        with self.assertRaises(IntegrityError):
+            async with self.db.begin_nested():
+                await repository.delete_draft_rows(
+                    self.db,
+                    original_id,
+                )
+
+        original_still_exists = await repository.find_prescription(self.db, original_id)
+        replacement_still_exists = await repository.find_prescription(self.db, replacement_id)
+        retained_item = await self.db.scalar(
+            select(PrescriptionItem.id).where(PrescriptionItem.prescription_id == original_id)
+        )
+
+        self.assertIsNotNone(original_still_exists)
+        self.assertIsNotNone(replacement_still_exists)
+        self.assertIsNotNone(retained_item)
+
+    async def doctor_access(self, *, write=False, consultation_id=None):
+        return await require_prescription_access(
+            self.db,
+            user=self.doctor,
+            request=self.request,
+            patient_id=self.patient_id,
+            consultation_id=consultation_id,
+            clinical_write=write,
+        )
+
+    async def test_patient_can_access_own_record(self):
+        source = await require_prescription_access(
+            self.db,
+            user=self.patient,
+            request=self.request,
+            patient_id=self.patient_id,
+            clinical_write=True,
+        )
+        self.assertEqual(source, "patient")
+
+    async def test_doctor_read_does_not_require_consultation(self):
+        source = await self.doctor_access()
+        self.assertEqual(source, "doctor")
+
+    async def test_doctor_write_requires_matching_consultation(self):
+        source = await self.doctor_access(
+            write=True,
+            consultation_id=self.consultation.id,
+        )
+        self.assertEqual(source, "doctor")
+
+        with self.assertRaises(AuthenticationError) as caught:
+            await self.doctor_access(
+                write=True,
+                consultation_id=uuid4(),
+            )
+        self.assertEqual(caught.exception.status_code, 403)
+
+    async def test_expired_grant_denies_access(self):
+        # Keep status active to verify the actual time-window check.
+        self.grant.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+        await self.db.flush()
+
+        with self.assertRaises(AuthenticationError) as caught:
+            await self.doctor_access()
+        self.assertEqual(caught.exception.status_code, 403)
+
+    async def test_revoked_grant_denies_access(self):
+        self.grant.status = "revoked"
+        self.grant.revoked_at = datetime.now(UTC)
+        await self.db.flush()
+
+        with self.assertRaises(AuthenticationError) as caught:
+            await self.doctor_access()
+        self.assertEqual(caught.exception.status_code, 403)
+
+    async def test_closed_consultation_denies_write(self):
+        self.consultation.ended_at = datetime.now(UTC)
+        await self.db.flush()
+
+        with self.assertRaises(AuthenticationError) as caught:
+            await self.doctor_access(
+                write=True,
+                consultation_id=self.consultation.id,
+            )
+        self.assertEqual(caught.exception.status_code, 403)
+
+    async def test_wrong_category_denies_access(self):
+        from sqlalchemy import delete
+
+        await self.db.execute(delete(GrantCategory).where(GrantCategory.grant_id == self.grant.id))
+        self.db.add(
+            GrantCategory(
+                grant_id=self.grant.id,
+                category="history_allergies",
+            )
+        )
+        await self.db.flush()
+
+        with self.assertRaises(AuthenticationError) as caught:
+            await self.doctor_access()
+        self.assertEqual(caught.exception.status_code, 403)
+
+    async def test_doctor_create_persists_source_items_and_audit(self):
+        body = self.payload().model_copy(update={"consultation_id": self.consultation.id})
+
+        result = await service.create_draft(
+            session=self.db,
+            user=self.doctor,
+            request=self.request,
+            patient_id=self.patient_id,
+            payload=body,
+        )
+        draft_id = result.prescription.id
+
+        self.db.expire_all()
+
+        stored = await repository.find_prescription(self.db, draft_id)
+        audit = await self.db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.target_id == draft_id,
+                AuditEvent.action == "prescription.draft.created",
+            )
+        )
+        item_id = await self.db.scalar(
+            select(PrescriptionItem.id).where(PrescriptionItem.prescription_id == draft_id)
+        )
+
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored.source, "doctor")
+        self.assertIsNotNone(stored.prescriber_user_id)
+        self.assertEqual(stored.status, "draft")
+        self.assertIsNone(stored.issued_at)
+        self.assertIsNotNone(item_id)
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit.actor_user_id, stored.prescriber_user_id)
+        self.assertEqual(audit.metadata_["item_count"], 1)
+        self.assertEqual(
+            audit.request_id,
+            self.request.state.request_id,
+        )
+
+    async def organization_context(self, *, membership_status="approved"):
+        # Use a valid organization type from the existing model enum.
+        organization_type = Organization.__table__.c.type.type.enums[0]
+
+        organization = Organization(
+            name="Synthetic prescription test organization",
+            type=organization_type,
+            status="active",
+        )
+        self.db.add(organization)
+        await self.db.flush()
+
+        membership = OrganizationMembership(
+            organization_id=organization.id,
+            user_id=self.doctor.id,
+            role="doctor",
+            status=membership_status,
+        )
+        self.db.add(membership)
+
+        self.grant.organization_id = organization.id
+        self.consultation.organization_id = organization.id
+        await self.db.flush()
+
+        return organization, membership
+
+    async def test_approved_organization_member_can_write(self):
+        await self.organization_context()
+
+        source = await self.doctor_access(
+            write=True,
+            consultation_id=self.consultation.id,
+        )
+
+        self.assertEqual(source, "doctor")
+
+    async def test_pending_organization_member_cannot_read(self):
+        await self.organization_context(membership_status="pending")
+
+        with self.assertRaises(AuthenticationError) as caught:
+            await self.doctor_access()
+
+        self.assertEqual(caught.exception.status_code, 403)
+
+    async def test_inactive_organization_cannot_read(self):
+        organization, _ = await self.organization_context()
+        organization.status = "pending"
+        await self.db.flush()
+
+        with self.assertRaises(AuthenticationError) as caught:
+            await self.doctor_access()
+
+        self.assertEqual(caught.exception.status_code, 403)
+
+    async def test_consultation_organization_must_match_grant(self):
+        await self.organization_context()
+
+        # Grant belongs to the organization; consultation does not.
+        self.consultation.organization_id = None
+        await self.db.flush()
+
+        with self.assertRaises(AuthenticationError) as caught:
+            await self.doctor_access(
+                write=True,
+                consultation_id=self.consultation.id,
+            )
+
+        self.assertEqual(caught.exception.status_code, 403)
