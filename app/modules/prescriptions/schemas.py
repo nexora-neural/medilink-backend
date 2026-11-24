@@ -1,5 +1,4 @@
-﻿"""Pydantic request and response schemas for prescriptions and OCR workflow."""
-
+"""Pydantic request and response schemas for prescriptions and OCR workflow."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -11,6 +10,7 @@ from pydantic import (
     ConfigDict,
     Field,
     field_validator,
+    model_validator,
 )
 
 
@@ -24,9 +24,7 @@ class MedicineInput(BaseModel):
     strength: str | None = Field(default=None, max_length=100)
     form: str | None = Field(default=None, max_length=100)
 
-    @field_validator(
-        "generic_name", "brand_name", "strength", "form"
-    )
+    @field_validator("generic_name", "brand_name", "strength", "form")
     @classmethod
     def validate_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -62,7 +60,9 @@ class MedicinesReadPage(BaseModel):
     page_size: int
     total: int
 
+
 # ML-112 prescription draft editing schemas
+
 
 class PrescriptionItemInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -74,9 +74,39 @@ class PrescriptionItemInput(BaseModel):
     frequency: str = Field(min_length=1, max_length=200)
     duration_days: int | None = Field(default=None, ge=1)
     instructions: str | None = Field(default=None, max_length=2000)
-    quantity: Decimal | None = Field(default=None, gt=0)
+    quantity: Decimal | None = Field(
+        default=None,
+        gt=0,
+        max_digits=12,
+        decimal_places=3,
+    )
     quantity_unit: Literal["tablet", "capsule", "mL"] | None = None
     is_prn: bool
+
+    @field_validator(
+        "medicine_name_snapshot",
+        "dose_text",
+        "frequency",
+    )
+    @classmethod
+    def required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Value must not be blank.")
+        return value
+
+    @field_validator("route", "instructions")
+    @classmethod
+    def optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+    @model_validator(mode="after")
+    def quantity_pair(self):
+        if (self.quantity is None) != (self.quantity_unit is None):
+            raise ValueError("quantity and quantity_unit must be supplied together.")
+        return self
 
 
 class PrescriptionInput(BaseModel):
@@ -88,6 +118,23 @@ class PrescriptionInput(BaseModel):
     ends_on: date | None = None
     original_document_id: UUID | None = None
     items: list[PrescriptionItemInput]
+
+    @field_validator("claimed_prescriber")
+    @classmethod
+    def clean_claimed_prescriber(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+    @model_validator(mode="after")
+    def date_order(self):
+        if (
+            self.starts_on is not None
+            and self.ends_on is not None
+            and self.ends_on < self.starts_on
+        ):
+            raise ValueError("ends_on must be on or after starts_on.")
+        return self
 
 
 class PrescriptionRecordRead(BaseModel):
@@ -150,6 +197,15 @@ class PrescriptionDetail(BaseModel):
     prescription: PrescriptionRecordRead
     items: list[PrescriptionItemRead]
     reviews: list[PrescriptionReviewRead]
+
+
+class PrescriptionDetailPage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[PrescriptionDetail]
+    page: int
+    page_size: int
+    total: int
 
 
 class ClinicalWriteErrorResponse(BaseModel):

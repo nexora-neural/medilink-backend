@@ -1,12 +1,15 @@
 """Business rules and orchestration for prescriptions and OCR workflow."""
 
 from datetime import UTC, datetime
+from uuid import UUID
 
 from fastapi import Request
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.audit.service import append_event
+from app.modules.documents.models import Document
 from app.modules.identity.auth import AuthenticationError
 from app.modules.identity.models import User
 from app.modules.identity.repository import get_roles
@@ -15,7 +18,11 @@ from app.modules.organizations.models import (
     OrganizationMembership,
 )
 from app.modules.prescriptions import repository
+from app.modules.prescriptions.access import require_prescription_access
 from app.modules.prescriptions.core_models import (
+    Medicine,
+    Prescription,
+    PrescriptionItem,
     PrescriptionReviewStatus,
     PrescriptionStatus,
 )
@@ -25,6 +32,7 @@ from app.modules.prescriptions.schemas import (
     MedicinesRead,
     MedicinesReadPage,
     PrescriptionDetail,
+    PrescriptionDetailPage,
     PrescriptionInput,
 )
 from app.modules.profiles.models import ProfessionalProfile
@@ -220,8 +228,6 @@ async def replace_prescription_draft(
 ) -> PrescriptionDetail:
     """Replace a draft prescription using an atomic version check."""
 
-    await require_medicine_reader(session=session, user=user, request=request)
-
     try:
         prescription = await repository.lock_prescription(
             session,
@@ -232,26 +238,45 @@ async def replace_prescription_draft(
             raise AuthenticationError(
                 status_code=404,
                 detail={
-                    "code": "NOT_FOUND",
+                    "code": "RESOURCE_NOT_FOUND",
                     "message": "Prescription was not found.",
                     "field_errors": {},
                     "request_id": request.state.request_id,
                 },
             )
 
-        roles = await get_roles(session, user.id)
+        source = getattr(prescription.source, "value", prescription.source)
 
-        is_patient_owner = (
-            "patient" in roles
-            and prescription.patient_user_id == user.id
-        )
-        is_doctor_owner = (
-            "doctor" in roles
-            and prescription.prescriber_user_id == user.id
-        )
+        is_patient_owner = source == "patient" and prescription.patient_user_id == user.id
+        is_doctor_owner = source == "doctor" and prescription.prescriber_user_id == user.id
 
         if not (is_patient_owner or is_doctor_owner):
             raise forbidden(request)
+
+        authorized_source = await require_prescription_access(
+            session,
+            user=user,
+            request=request,
+            patient_id=prescription.patient_user_id,
+            consultation_id=prescription.consultation_id,
+            clinical_write=True,
+        )
+
+        if authorized_source != source:
+            raise forbidden(request)
+
+        # Recheck permission for a replacement consultation, if supplied.
+        if payload.consultation_id != prescription.consultation_id:
+            replacement_source = await require_prescription_access(
+                session,
+                user=user,
+                request=request,
+                patient_id=prescription.patient_user_id,
+                consultation_id=payload.consultation_id,
+                clinical_write=True,
+            )
+            if replacement_source != source:
+                raise forbidden(request)
 
         if prescription.version != expected_version:
             raise AuthenticationError(
@@ -264,7 +289,7 @@ async def replace_prescription_draft(
                 },
             )
 
-        if prescription.status != PrescriptionStatus.DRAFT:
+        if prescription.status != PrescriptionStatus.DRAFT or prescription.issued_at is not None:
             raise AuthenticationError(
                 status_code=409,
                 detail={
@@ -285,9 +310,7 @@ async def replace_prescription_draft(
                 detail={
                     "code": "VALIDATION_ERROR",
                     "message": "ends_on must be on or after starts_on.",
-                    "field_errors": {
-                        "ends_on": ["Must be on or after starts_on."]
-                    },
+                    "field_errors": {"ends_on": ["Must be on or after starts_on."]},
                     "request_id": request.state.request_id,
                 },
             )
@@ -306,8 +329,17 @@ async def replace_prescription_draft(
                 },
             )
 
-        prescription.consultation_id = payload.consultation_id
-        prescription.claimed_prescriber = payload.claimed_prescriber
+        await validate_draft_references(
+            session,
+            request=request,
+            patient_id=prescription.patient_user_id,
+            payload=payload,
+        )
+
+        prescription.consultation_id = payload.consultation_id if source == "doctor" else None
+        prescription.claimed_prescriber = (
+            payload.claimed_prescriber if source == "patient" else None
+        )
         prescription.starts_on = payload.starts_on
         prescription.ends_on = payload.ends_on
         prescription.original_document_id = payload.original_document_id
@@ -332,10 +364,10 @@ async def replace_prescription_draft(
         )
         reviews = list(reviews_result.all())
 
-        if reviews:
-            prescription.review_status = PrescriptionReviewStatus.NOT_REVIEWED
-            prescription.reviewed_by = None
-            prescription.reviewed_at = None
+        # Retain review rows, but invalidate approval of the previous content.
+        prescription.review_status = PrescriptionReviewStatus.NOT_REVIEWED
+        prescription.reviewed_by = None
+        prescription.reviewed_at = None
 
         await append_event(
             session,
@@ -360,6 +392,340 @@ async def replace_prescription_draft(
 
         await session.commit()
         return result
+
+    except Exception:
+        await session.rollback()
+        raise
+
+
+async def build_prescription_detail(
+    session: AsyncSession,
+    prescription: Prescription,
+) -> PrescriptionDetail:
+    items = list(
+        (
+            await session.scalars(
+                select(PrescriptionItem)
+                .where(PrescriptionItem.prescription_id == prescription.id)
+                .order_by(
+                    PrescriptionItem.created_at,
+                    PrescriptionItem.id,
+                )
+            )
+        ).all()
+    )
+
+    reviews = list(
+        (
+            await session.scalars(
+                select(PrescriptionReview)
+                .where(PrescriptionReview.prescription_id == prescription.id)
+                .order_by(
+                    PrescriptionReview.reviewed_at,
+                    PrescriptionReview.id,
+                )
+            )
+        ).all()
+    )
+
+    return PrescriptionDetail(
+        prescription=prescription,
+        items=items,
+        reviews=reviews,
+    )
+
+
+async def read_prescription(
+    *,
+    session: AsyncSession,
+    user: User,
+    request: Request,
+    prescription_id: UUID,
+) -> PrescriptionDetail:
+    prescription = await repository.find_prescription(
+        session,
+        prescription_id,
+    )
+
+    if prescription is None:
+        raise AuthenticationError(
+            status_code=404,
+            detail={
+                "code": "RESOURCE_NOT_FOUND",
+                "message": "Prescription not found.",
+                "field_errors": {},
+                "request_id": getattr(request.state, "request_id", ""),
+            },
+        )
+
+    await require_prescription_access(
+        session,
+        user=user,
+        request=request,
+        patient_id=prescription.patient_user_id,
+    )
+
+    return await build_prescription_detail(session, prescription)
+
+
+async def list_prescriptions(
+    *,
+    session: AsyncSession,
+    user: User,
+    request: Request,
+    patient_id: UUID,
+    page: int = 1,
+    page_size: int = 20,
+    status: str | None = None,
+    source: str | None = None,
+) -> PrescriptionDetailPage:
+    await require_prescription_access(
+        session,
+        user=user,
+        request=request,
+        patient_id=patient_id,
+    )
+
+    prescriptions, total = await repository.list_patient_prescriptions(
+        session,
+        patient_id=patient_id,
+        page=page,
+        page_size=page_size,
+        status=status,
+        source=source,
+    )
+
+    details = []
+    for prescription in prescriptions:
+        details.append(await build_prescription_detail(session, prescription))
+
+    return PrescriptionDetailPage(
+        items=details,
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+async def validate_draft_references(
+    session: AsyncSession,
+    *,
+    request: Request,
+    patient_id: UUID,
+    payload: PrescriptionInput,
+) -> None:
+    if payload.original_document_id is not None:
+        document = await session.scalar(
+            select(Document)
+            .where(
+                Document.id == payload.original_document_id,
+                Document.owner_user_id == patient_id,
+                Document.status == "active",
+                Document.document_type == "prescription",
+            )
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
+        )
+
+        if document is None or (
+            document.patient_user_id is not None and document.patient_user_id != patient_id
+        ):
+            raise AuthenticationError(
+                status_code=422,
+                detail={
+                    "code": "VALIDATION_ERROR",
+                    "message": "Please check the highlighted fields.",
+                    "field_errors": {
+                        "original_document_id": [
+                            "Select an active prescription document owned by this patient."
+                        ]
+                    },
+                    "request_id": getattr(request.state, "request_id", ""),
+                },
+            )
+
+    medicine_ids = {item.medicine_id for item in payload.items if item.medicine_id is not None}
+
+    if medicine_ids:
+        existing_ids = set(
+            (
+                await session.scalars(
+                    select(Medicine.id)
+                    .where(Medicine.id.in_(medicine_ids))
+                    .order_by(Medicine.id)
+                    .with_for_update(read=True)
+                )
+            ).all()
+        )
+
+        if existing_ids != medicine_ids:
+            raise AuthenticationError(
+                status_code=422,
+                detail={
+                    "code": "VALIDATION_ERROR",
+                    "message": "Please check the highlighted fields.",
+                    "field_errors": {"items": ["One or more selected medicines are unavailable."]},
+                    "request_id": getattr(request.state, "request_id", ""),
+                },
+            )
+
+
+async def create_draft(
+    *,
+    session: AsyncSession,
+    user: User,
+    request: Request,
+    patient_id: UUID,
+    payload: PrescriptionInput,
+) -> PrescriptionDetail:
+    try:
+        source = await require_prescription_access(
+            session,
+            user=user,
+            request=request,
+            patient_id=patient_id,
+            consultation_id=payload.consultation_id,
+            clinical_write=True,
+        )
+
+        await validate_draft_references(
+            session,
+            request=request,
+            patient_id=patient_id,
+            payload=payload,
+        )
+
+        prescription = await repository.create_prescription_draft(
+            session,
+            patient_id=patient_id,
+            actor_id=user.id,
+            source=source,
+            payload=payload,
+        )
+
+        await append_event(
+            session,
+            actor_user_id=user.id,
+            action="prescription.draft.created",
+            target_type="prescriptions",
+            target_id=prescription.id,
+            outcome="success",
+            request_id=getattr(request.state, "request_id", ""),
+            metadata={
+                "source": source,
+                "new_version": prescription.version,
+                "item_count": len(payload.items),
+            },
+        )
+
+        result = await build_prescription_detail(
+            session,
+            prescription,
+        )
+
+        await session.commit()
+        return result
+
+    except Exception:
+        await session.rollback()
+        raise
+
+
+async def delete_draft(
+    *,
+    session: AsyncSession,
+    user: User,
+    request: Request,
+    prescription_id: UUID,
+) -> None:
+    request_id = getattr(request.state, "request_id", "")
+
+    try:
+        prescription = await repository.lock_prescription(
+            session,
+            prescription_id,
+        )
+
+        if prescription is None:
+            raise AuthenticationError(
+                status_code=404,
+                detail={
+                    "code": "RESOURCE_NOT_FOUND",
+                    "message": "Prescription not found.",
+                    "field_errors": {},
+                    "request_id": request_id,
+                },
+            )
+
+        source = getattr(prescription.source, "value", prescription.source)
+
+        patient_owner = source == "patient" and prescription.patient_user_id == user.id
+        doctor_owner = source == "doctor" and prescription.prescriber_user_id == user.id
+
+        if not (patient_owner or doctor_owner):
+            raise forbidden(request)
+
+        authorized_source = await require_prescription_access(
+            session,
+            user=user,
+            request=request,
+            patient_id=prescription.patient_user_id,
+            consultation_id=prescription.consultation_id,
+            clinical_write=True,
+        )
+
+        if authorized_source != source:
+            raise forbidden(request)
+
+        if prescription.status != PrescriptionStatus.DRAFT or prescription.issued_at is not None:
+            raise AuthenticationError(
+                status_code=409,
+                detail={
+                    "code": "INVALID_STATE",
+                    "message": "Only never-issued drafts can be deleted.",
+                    "field_errors": {},
+                    "request_id": request_id,
+                },
+            )
+
+        deleted_id = prescription.id
+        deleted_version = prescription.version
+
+        try:
+            await repository.delete_draft_rows(
+                session,
+                deleted_id,
+            )
+        except IntegrityError as exc:
+            sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+            if sqlstate != "23503":
+                raise
+
+            raise AuthenticationError(
+                status_code=409,
+                detail={
+                    "code": "INVALID_STATE",
+                    "message": ("This draft has linked records and cannot be deleted."),
+                    "field_errors": {},
+                    "request_id": request_id,
+                },
+            ) from None
+
+        await append_event(
+            session,
+            actor_user_id=user.id,
+            action="prescription.draft.deleted",
+            target_type="prescriptions",
+            target_id=deleted_id,
+            outcome="success",
+            request_id=request_id,
+            metadata={
+                "source": source,
+                "previous_version": deleted_version,
+            },
+        )
+
+        await session.commit()
 
     except Exception:
         await session.rollback()
