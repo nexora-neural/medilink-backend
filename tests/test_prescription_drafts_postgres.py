@@ -570,3 +570,79 @@ class PrescriptionDraftPostgresTests(IsolatedAsyncioTestCase):
 
         self.assertIsNone(await repository.find_prescription(self.db, draft_id))
         self.assertIsNotNone(await self.db.get(Document, document_id))
+
+    async def test_http_rejects_unsupported_quantity_precision(self):
+        app = FastAPI()
+        app.include_router(router, prefix="/api/v1")
+
+        async def test_session():
+            yield self.db
+
+        async def test_user():
+            return self.patient
+
+        app.dependency_overrides[get_session] = test_session
+        app.dependency_overrides[get_current_user] = test_user
+
+        @app.middleware("http")
+        async def request_id_middleware(request, call_next):
+            request.state.request_id = str(uuid4())
+            return await call_next(request)
+
+        transport = ASGITransport(app=app)
+
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            collection_url = f"/api/v1/patients/{self.patient_id}/prescriptions"
+
+            # A supported quantity must save without rounding.
+            valid_body = self.payload().model_dump(mode="json")
+            valid_body["items"][0]["quantity"] = "1.234"
+            valid_body["items"][0]["quantity_unit"] = "mL"
+
+            response = await client.post(
+                collection_url,
+                json=valid_body,
+            )
+            self.assertEqual(response.status_code, 201, response.text)
+
+            created = response.json()
+            draft_id = created["prescription"]["id"]
+            version = created["prescription"]["version"]
+            detail_url = f"/api/v1/prescriptions/{draft_id}"
+
+            for quantity in ("1.2345", "0.0001", "1000000000"):
+                with self.subTest(quantity=quantity):
+                    invalid_body = self.payload().model_dump(mode="json")
+                    invalid_body["items"][0]["quantity"] = quantity
+                    invalid_body["items"][0]["quantity_unit"] = "mL"
+
+                    # Invalid create must return 422.
+                    response = await client.post(
+                        collection_url,
+                        json=invalid_body,
+                    )
+                    self.assertEqual(response.status_code, 422, response.text)
+
+                    # Invalid edit must also return 422.
+                    response = await client.put(
+                        f"{detail_url}/draft",
+                        json=invalid_body,
+                        headers={"If-Match": str(version)},
+                    )
+                    self.assertEqual(response.status_code, 422, response.text)
+
+            # Invalid edits must leave the original draft unchanged.
+            response = await client.get(detail_url)
+            self.assertEqual(response.status_code, 200, response.text)
+
+            stored = response.json()
+            self.assertEqual(stored["prescription"]["version"], version)
+            self.assertEqual(str(stored["items"][0]["quantity"]), "1.234")
+
+            # Invalid creates must not add any drafts.
+            response = await client.get(collection_url)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["total"], 1)

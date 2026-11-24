@@ -74,7 +74,12 @@ class PrescriptionItemInput(BaseModel):
     frequency: str = Field(min_length=1, max_length=200)
     duration_days: int | None = Field(default=None, ge=1)
     instructions: str | None = Field(default=None, max_length=2000)
-    quantity: Decimal | None = Field(default=None, gt=0)
+    quantity: Decimal | None = Field(
+        default=None,
+        gt=0,
+        max_digits=12,
+        decimal_places=3,
+    )
     quantity_unit: Literal["tablet", "capsule", "mL"] | None = None
     is_prn: bool
 
