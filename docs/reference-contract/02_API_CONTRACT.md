@@ -2222,8 +2222,26 @@ Lock the original, check ownership, source and active status, then atomically in
   the existing upload API. Uploading an initial report publishes it immediately
   with generated reference `upload-{upload_request_id}` and consumes the request.
   Do not call the separate publish endpoint for this already-published document.
-- Staging requires an initial laboratory report: patient self-upload,
-  verification evidence, `supersedes_id`, and `correction_reason` cannot be staged.
+- Laboratory report staging supports either an initial upload or an authorized
+  correction. Supply exactly one of `upload_request_id` or `supersedes_id`.
+  Patient self-upload, verification evidence and `correction_reason` cannot
+  be staged.
+- For an initial laboratory report, use `stage_for_report=true` with an active
+  matching `upload_request_id`. Omit `supersedes_id`.
+- For a laboratory correction, use `stage_for_report=true`,
+  `document_type=report` and `supersedes_id` set to the original report's
+  document ID, not its report ID. Omit `upload_request_id` and
+  `correction_reason`. The original report must be active, and the actor must
+  currently be verified staff of its originating laboratory. The original
+  upload request need not remain unused or unexpired.
+- Correction staging creates only the replacement document. It does not
+  supersede the original document/report, publish a report or notify the patient.
+  Publish the returned document ID through
+  `POST /api/v1/reports/{report_id}/versions`, using the original active report
+  ID, a correction reason and a required `Idempotency-Key`.
+- Correction permission does not authorize unrelated initial uploads.
+  Patient-source corrections use a normal owner-patient document upload with
+  `stage_for_report=false`, followed by the report versions endpoint.
 - Both laboratory publication flows enqueue exactly one `report_accepted`
   notification per report version in the same transaction as the report and
   request consumption. Original-laboratory corrections also notify the patient.

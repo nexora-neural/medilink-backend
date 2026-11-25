@@ -16,7 +16,7 @@ from pathlib import Path
 from sqlalchemy import text
 
 from app.database.session import async_session, engine
-from app.modules.documents.storage import _root
+from app.modules.documents.storage import _root, file_consistency_lock
 
 KEY = re.compile(r"[0-9a-f]{32}\Z")
 MIN_AGE_SECONDS = 3600
@@ -80,18 +80,19 @@ def quarantine(root: Path, keys: list[str]) -> None:
 
 async def run(apply: bool) -> int:
     root = _root()
-    async with async_session() as session:
-        result = await session.execute(text("SELECT storage_key, id FROM documents"))
-        references = {row.storage_key: str(row.id) for row in result}
-        orphans, missing = inventory(root, references, time.time())
-        print(f"Orphan candidates: {len(orphans)}; missing document files: {len(missing)}")
-        for key in orphans:
-            print(f"orphan {key}")
-        for document_id in missing:
-            print(f"missing document {document_id}")
-        if apply:
-            quarantine(root, orphans)
-            print(f"Quarantined {len(orphans)} orphan files")
+    with file_consistency_lock(exclusive=True):
+        async with async_session() as session:
+            result = await session.execute(text("SELECT storage_key, id FROM documents"))
+            references = {row.storage_key: str(row.id) for row in result}
+            orphans, missing = inventory(root, references, time.time())
+            print(f"Orphan candidates: {len(orphans)}; missing document files: {len(missing)}")
+            for key in orphans:
+                print(f"orphan {key}")
+            for document_id in missing:
+                print(f"missing document {document_id}")
+            if apply:
+                quarantine(root, orphans)
+                print(f"Quarantined {len(orphans)} orphan files")
     await engine.dispose()
     return 1 if missing else 0
 

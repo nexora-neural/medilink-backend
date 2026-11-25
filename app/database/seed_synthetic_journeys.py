@@ -603,7 +603,7 @@ async def main():
                 await seed(connection, datetime.now(UTC), args.patient_uid, args.doctor_uid)
         except BaseException:
             for path in created_paths:
-                path.unlink(missing_ok=True)
+                await storage.delete(path.name)
             raise
         print("Synthetic demo records seeded.")
     finally:
