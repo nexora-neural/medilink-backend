@@ -23,6 +23,7 @@ from app.modules.profiles.doctor_qr.router import router as doctor_qr_router
 from app.modules.profiles.router import router as profiles_router
 from app.modules.vaccinations.router import router as vaccinations_router
 from app.modules.verification.router import router as verification_router
+from app.modules.integrations.report_router import router as integration_reports_router
 
 api_router = APIRouter()
 
@@ -46,6 +47,7 @@ for module_router in (
     audit_router,
     operations_router,
     integrations_router,
+    integration_reports_router,
     fhir_router,
     laboratory_router,
     doctor_qr_router,
