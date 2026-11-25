@@ -4,6 +4,7 @@ import os
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, skipUnless
+from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi import FastAPI
@@ -20,6 +21,11 @@ from app.modules.consultations.models import Consultation
 from app.modules.documents.models import Document
 from app.modules.identity.auth import AuthenticationError, get_current_user
 from app.modules.identity.models import Role, User, UserRole
+from app.modules.medication.models import (
+    DoseOccurrence,
+    MedicationLog,
+    MedicationSchedule,
+)
 from app.modules.organizations.models import Organization, OrganizationMembership
 from app.modules.prescriptions import repository, service
 from app.modules.prescriptions.access import require_prescription_access
@@ -817,3 +823,187 @@ class PrescriptionDraftPostgresTests(IsolatedAsyncioTestCase):
             ).all()
         )
         self.assertEqual(len(events), 1)
+
+    async def replacement_fixture(self):
+        body = self.payload().model_copy(
+            update={
+                "consultation_id": self.consultation.id,
+                "starts_on": date(2026, 11, 25),
+                "ends_on": date(2026, 11, 27),
+            }
+        )
+
+        original = await service.create_draft(
+            session=self.db,
+            user=self.doctor,
+            request=self.request,
+            patient_id=self.patient_id,
+            payload=body,
+        )
+        original_id = original.prescription.id
+
+        original = await service.issue_prescription(
+            session=self.db,
+            user=self.doctor,
+            request=self.request,
+            prescription_id=original_id,
+        )
+
+        now = datetime.now(UTC)
+        schedule = MedicationSchedule(
+            prescription_item_id=original.items[0].id,
+            patient_user_id=self.patient_id,
+            timezone="Asia/Colombo",
+            starts_at=now - timedelta(days=1),
+            confirmed_at=now,
+            status="active",
+        )
+        self.db.add(schedule)
+        await self.db.flush()
+
+        past = DoseOccurrence(
+            schedule_id=schedule.id,
+            scheduled_for=now - timedelta(hours=2),
+            status="taken",
+        )
+        future = DoseOccurrence(
+            schedule_id=schedule.id,
+            scheduled_for=now + timedelta(hours=2),
+            status="upcoming",
+            snoozed_until=now + timedelta(hours=3),
+        )
+        self.db.add_all([past, future])
+        await self.db.flush()
+
+        log = MedicationLog(
+            dose_occurrence_id=past.id,
+            response="taken",
+            reported_taken_at=now - timedelta(hours=2),
+            recorded_by=self.patient_id,
+        )
+        self.db.add(log)
+        await self.db.flush()
+
+        ids = {
+            "original": original_id,
+            "original_version": original.prescription.version,
+            "schedule": schedule.id,
+            "schedule_version": schedule.version,
+            "past": past.id,
+            "future": future.id,
+            "log": log.id,
+        }
+        await self.db.commit()
+
+        replacement = await service.create_draft(
+            session=self.db,
+            user=self.doctor,
+            request=self.request,
+            patient_id=self.patient_id,
+            payload=body,
+        )
+        replacement_id = replacement.prescription.id
+
+        # Version-creation API belongs to the lifecycle task.
+        # Link the synthetic draft directly for this issue-service test.
+        row = await repository.find_prescription(self.db, replacement_id)
+        row.previous_prescription_id = original_id
+        await self.db.commit()
+
+        ids["replacement"] = replacement_id
+        return ids
+
+    async def test_replacement_supersedes_and_preserves_past_history(self):
+        ids = await self.replacement_fixture()
+
+        await service.issue_prescription(
+            session=self.db,
+            user=self.doctor,
+            request=self.request,
+            prescription_id=ids["replacement"],
+        )
+
+        self.db.expire_all()
+
+        original = await repository.find_prescription(self.db, ids["original"])
+        replacement = await repository.find_prescription(self.db, ids["replacement"])
+        schedule = await self.db.get(MedicationSchedule, ids["schedule"])
+        past = await self.db.get(DoseOccurrence, ids["past"])
+        future = await self.db.get(DoseOccurrence, ids["future"])
+        log = await self.db.get(MedicationLog, ids["log"])
+
+        self.assertEqual(original.status, "superseded")
+        self.assertEqual(original.version, ids["original_version"] + 1)
+        self.assertEqual(replacement.status, "active")
+        self.assertEqual(replacement.previous_prescription_id, original.id)
+
+        self.assertEqual(schedule.status, "cancelled")
+        self.assertEqual(schedule.version, ids["schedule_version"] + 1)
+        self.assertEqual(future.status, "cancelled")
+        self.assertIsNone(future.snoozed_until)
+
+        self.assertEqual(past.status, "taken")
+        self.assertIsNotNone(log)
+        self.assertEqual(log.response, "taken")
+        self.assertEqual(log.dose_occurrence_id, past.id)
+
+        event = await self.db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.target_id == ids["replacement"],
+                AuditEvent.action == "prescription.issued",
+            )
+        )
+        self.assertIsNotNone(event)
+        self.assertEqual(
+            event.metadata_["supersedes_id"],
+            str(ids["original"]),
+        )
+
+    async def test_replacement_audit_failure_rolls_back_all_changes(self):
+        ids = await self.replacement_fixture()
+        real_append_event = service.append_event
+
+        async def fail_issue_audit(*args, **kwargs):
+            if kwargs["action"] == "prescription.issued":
+                raise RuntimeError("Synthetic issue audit failure")
+            return await real_append_event(*args, **kwargs)
+
+        with patch.object(
+            service,
+            "append_event",
+            side_effect=fail_issue_audit,
+        ):
+            with self.assertRaises(RuntimeError):
+                await service.issue_prescription(
+                    session=self.db,
+                    user=self.doctor,
+                    request=self.request,
+                    prescription_id=ids["replacement"],
+                )
+
+        self.db.expire_all()
+
+        original = await repository.find_prescription(self.db, ids["original"])
+        replacement = await repository.find_prescription(self.db, ids["replacement"])
+        schedule = await self.db.get(MedicationSchedule, ids["schedule"])
+        future = await self.db.get(DoseOccurrence, ids["future"])
+        log = await self.db.get(MedicationLog, ids["log"])
+
+        self.assertEqual(original.status, "active")
+        self.assertEqual(original.version, ids["original_version"])
+        self.assertEqual(replacement.status, "draft")
+        self.assertIsNone(replacement.issued_at)
+
+        self.assertEqual(schedule.status, "active")
+        self.assertEqual(schedule.version, ids["schedule_version"])
+        self.assertEqual(future.status, "upcoming")
+        self.assertIsNotNone(future.snoozed_until)
+        self.assertIsNotNone(log)
+
+        supersede_event = await self.db.scalar(
+            select(AuditEvent.id).where(
+                AuditEvent.target_id == ids["original"],
+                AuditEvent.action == "prescription.superseded",
+            )
+        )
+        self.assertIsNone(supersede_event)
