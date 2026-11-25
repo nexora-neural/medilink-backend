@@ -1,4 +1,4 @@
-﻿"""Database access methods for medication schedules and adherence."""
+"""Database access methods for medication schedules and adherence."""
 
 from datetime import datetime, time
 from uuid import UUID
@@ -12,7 +12,7 @@ from app.modules.medication.models import (
     MedicationSchedule,
     ScheduleTime,
 )
-from app.modules.prescriptions.core_models import PrescriptionItem
+from app.modules.prescriptions.core_models import Prescription, PrescriptionItem
 
 
 async def lock_schedule(
@@ -127,3 +127,29 @@ async def create_schedule(
     await session.refresh(schedule)
 
     return schedule
+
+
+async def lock_schedule_prescription(
+    session: AsyncSession,
+    schedule_id: UUID,
+) -> Prescription | None:
+    """Lock the parent prescription before any schedule row lock."""
+
+    prescription_id = await session.scalar(
+        select(PrescriptionItem.prescription_id)
+        .join(
+            MedicationSchedule,
+            MedicationSchedule.prescription_item_id == PrescriptionItem.id,
+        )
+        .where(MedicationSchedule.id == schedule_id)
+    )
+
+    if prescription_id is None:
+        return None
+
+    return await session.scalar(
+        select(Prescription)
+        .where(Prescription.id == prescription_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )

@@ -16,6 +16,10 @@ from app.modules.audit.models import AuditEvent
 from app.modules.consent.models import AccessGrant, GrantCategory
 from app.modules.consultations.models import Consultation
 from app.modules.identity.models import Role, User, UserRole
+from app.modules.medication import repository as medication_repository
+from app.modules.medication import service as medication_service
+from app.modules.medication.models import MedicationSchedule
+from app.modules.medication.schemas import ScheduleInput
 from app.modules.prescriptions import repository, service
 from app.modules.prescriptions.core_models import Prescription, PrescriptionItem
 from app.modules.profiles.models import PatientProfile, ProfessionalProfile
@@ -203,3 +207,179 @@ class PrescriptionIssueConcurrencyTests(IsolatedAsyncioTestCase):
             self.assertEqual(stored.status, "active")
             self.assertEqual(stored.version, 2)
             self.assertEqual(event_count, 1)
+
+    async def test_schedule_replacement_racing_issue_leaves_no_active_schedule(self):
+        # Prepare an issued predecessor, its schedule and a linked draft.
+        async with self.sessions() as session:
+            doctor = await session.get(User, self.doctor_id)
+            request = SimpleNamespace(state=SimpleNamespace(request_id=str(uuid4())))
+            await service.issue_prescription(
+                session=session,
+                user=doctor,
+                request=request,
+                prescription_id=self.prescription_id,
+            )
+
+            original = await session.get(Prescription, self.prescription_id)
+            original_item = await session.scalar(
+                select(PrescriptionItem).where(PrescriptionItem.prescription_id == original.id)
+            )
+            now = datetime.now(UTC)
+
+            schedule = MedicationSchedule(
+                prescription_item_id=original_item.id,
+                patient_user_id=original.patient_user_id,
+                timezone="Asia/Colombo",
+                starts_at=now - timedelta(hours=1),
+                confirmed_at=now,
+                status="active",
+                version=1,
+            )
+            replacement = Prescription(
+                patient_user_id=original.patient_user_id,
+                prescriber_user_id=self.doctor_id,
+                consultation_id=original.consultation_id,
+                source="doctor",
+                status="draft",
+                starts_on=original.starts_on,
+                ends_on=original.ends_on,
+                previous_prescription_id=original.id,
+                created_by=self.doctor_id,
+                version=1,
+            )
+            session.add_all([schedule, replacement])
+            await session.flush()
+
+            session.add(
+                PrescriptionItem(
+                    prescription_id=replacement.id,
+                    medicine_name_snapshot="Synthetic replacement",
+                    dose_text="Synthetic dose",
+                    route="Oral",
+                    frequency="Synthetic frequency",
+                    duration_days=3,
+                    quantity=3,
+                    quantity_unit="tablet",
+                    is_prn=False,
+                )
+            )
+
+            schedule_id = schedule.id
+            item_id = original_item.id
+            patient_id = original.patient_user_id
+            replacement_id = replacement.id
+            await session.commit()
+
+        payload = ScheduleInput(
+            prescription_item_id=item_id,
+            timezone="Asia/Colombo",
+            starts_at=now + timedelta(minutes=10),
+            ends_at=now + timedelta(days=2),
+            times=["08:00:00"],
+            confirmed=True,
+        )
+
+        schedule_locked = asyncio.Event()
+        release_replacement = asyncio.Event()
+        issue_connected = asyncio.Event()
+        issue_pid = None
+        real_lock_schedule = medication_repository.lock_schedule
+
+        async def pause_after_schedule_lock(*args, **kwargs):
+            row = await real_lock_schedule(*args, **kwargs)
+            schedule_locked.set()
+            await asyncio.wait_for(release_replacement.wait(), timeout=15)
+            return row
+
+        async def replace_schedule():
+            async with self.sessions() as session:
+                return await medication_service.replace_schedule(
+                    session,
+                    schedule_id=schedule_id,
+                    actor_user_id=patient_id,
+                    expected_version=1,
+                    payload=payload,
+                    request_id=str(uuid4()),
+                )
+
+        async def issue_replacement():
+            nonlocal issue_pid
+
+            async with self.sessions() as session:
+                issue_pid = await session.scalar(select(func.pg_backend_pid()))
+                issue_connected.set()
+
+                doctor = await session.get(User, self.doctor_id)
+                request = SimpleNamespace(state=SimpleNamespace(request_id=str(uuid4())))
+                return await service.issue_prescription(
+                    session=session,
+                    user=doctor,
+                    request=request,
+                    prescription_id=replacement_id,
+                )
+
+        tasks = []
+
+        with patch.object(
+            medication_repository,
+            "lock_schedule",
+            pause_after_schedule_lock,
+        ):
+            try:
+                replacement_task = asyncio.create_task(replace_schedule())
+                tasks.append(replacement_task)
+
+                await asyncio.wait_for(schedule_locked.wait(), timeout=10)
+
+                issue_task = asyncio.create_task(issue_replacement())
+                tasks.append(issue_task)
+                await asyncio.wait_for(issue_connected.wait(), timeout=10)
+
+                # Verify that issuance actually reaches a PostgreSQL lock wait.
+                blocked = False
+                async with self.sessions() as observer:
+                    for _ in range(100):
+                        blockers = await observer.scalar(select(func.pg_blocking_pids(issue_pid)))
+                        if blockers:
+                            blocked = True
+                            break
+                        await asyncio.sleep(0.05)
+
+                self.assertTrue(
+                    blocked,
+                    "Issuance never reached the expected lock wait.",
+                )
+
+                release_replacement.set()
+
+                await asyncio.wait_for(
+                    asyncio.gather(replacement_task, issue_task),
+                    timeout=15,
+                )
+            finally:
+                release_replacement.set()
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+        async with self.sessions() as session:
+            original = await session.get(Prescription, self.prescription_id)
+            replacement = await session.get(Prescription, replacement_id)
+            schedules = list(
+                (
+                    await session.scalars(
+                        select(MedicationSchedule).where(
+                            MedicationSchedule.prescription_item_id == item_id
+                        )
+                    )
+                ).all()
+            )
+
+            self.assertEqual(original.status, "superseded")
+            self.assertEqual(replacement.status, "active")
+            self.assertEqual(len(schedules), 2)
+            self.assertTrue(
+                all(row.status == "cancelled" for row in schedules),
+                [row.status for row in schedules],
+            )

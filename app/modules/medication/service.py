@@ -1,4 +1,4 @@
-﻿"""Business rules and orchestration for medication schedules and adherence."""
+"""Business rules and orchestration for medication schedules and adherence."""
 
 from datetime import UTC, datetime, time
 from uuid import UUID
@@ -33,7 +33,22 @@ async def replace_schedule(
     """Atomically replace reminder times for an existing schedule."""
 
     try:
-        old_schedule = await repository.lock_schedule(session, schedule_id)
+        parent = await repository.lock_schedule_prescription(
+            session,
+            schedule_id,
+        )
+
+        if parent is None:
+            raise MedicationScheduleError(
+                404,
+                "NOT_FOUND",
+                "Medication schedule was not found.",
+            )
+
+        old_schedule = await repository.lock_schedule(
+            session,
+            schedule_id,
+        )
 
         if old_schedule is None:
             raise MedicationScheduleError(404, "NOT_FOUND", "Medication schedule was not found.")
@@ -41,6 +56,32 @@ async def replace_schedule(
         if old_schedule.patient_user_id != actor_user_id:
             raise MedicationScheduleError(
                 403, "ACCESS_DENIED", "You do not have access to this schedule."
+            )
+
+        if parent.patient_user_id != actor_user_id:
+            raise MedicationScheduleError(
+                403,
+                "ACCESS_DENIED",
+                "You do not have access to this prescription.",
+            )
+
+        item = await repository.get_prescription_item(
+            session,
+            old_schedule.prescription_item_id,
+        )
+
+        if item is None or item.prescription_id != parent.id:
+            raise MedicationScheduleError(
+                409,
+                "INVALID_STATE",
+                "The schedule prescription link has changed.",
+            )
+
+        if parent.status != "active" or parent.issued_at is None:
+            raise MedicationScheduleError(
+                409,
+                "INVALID_STATE",
+                "Only active prescriptions can have replacement schedules.",
             )
 
         if old_schedule.version != expected_version:
