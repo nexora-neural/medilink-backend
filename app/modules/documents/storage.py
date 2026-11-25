@@ -1,7 +1,6 @@
 """Local, non-public, random-key file storage (single-server development setup)."""
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import os
 import stat
@@ -13,6 +12,11 @@ from fastapi import UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
+
+try:
+    import fcntl
+except ImportError:  # Windows can run the API, but not the POSIX backup worker.
+    fcntl = None
 
 CHUNK_SIZE = 64 * 1024
 
@@ -41,6 +45,11 @@ def file_consistency_lock(*, exclusive: bool):
     All processes must use the same private storage root on a filesystem with
     working advisory flock support. The lock file must never be removed.
     """
+    if fcntl is None:
+        if not exclusive:
+            raise OSError("Local backups require POSIX file locking")
+        yield
+        return
     if not hasattr(os, "O_NOFOLLOW"):
         raise OSError("Safe private-storage locking is unavailable")
     path = _root() / ".backup-consistency.lock"

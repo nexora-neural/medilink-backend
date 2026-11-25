@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 from datetime import UTC, datetime
@@ -22,6 +23,7 @@ from sqlalchemy import select, text
 from app.core.config import settings
 from app.database.session import async_session, engine
 from app.modules.audit.models import AuditEvent, BackupRun, JobRun
+from app.modules.documents.storage import file_consistency_lock
 from app.modules.operations import backup_runner as runner_module
 from app.modules.operations import backup_snapshot
 from app.modules.operations.backup_crypto import read_key
@@ -35,8 +37,10 @@ from app.modules.operations.backup_runner import LOCK_ID, run_backup
 def test_backup_snapshot_excludes_concurrent_commits_and_restores_files():
     source = os.environ["DB_NAME"]
     target = os.environ["ML137_RESTORE_TEST_DATABASE"]
+    scheduled_target = os.environ["ML137_SCHEDULED_RESTORE_TEST_DATABASE"]
     assert source.startswith("ml137_test_") and target.startswith("ml137_test_")
-    assert source != target
+    assert scheduled_target.startswith("ml137_test_")
+    assert len({source, target, scheduled_target}) == 3
     assert os.environ["DB_HOST"].startswith("/private/tmp")
     connection_args = {
         "host": os.environ["DB_HOST"],
@@ -47,6 +51,7 @@ def test_backup_snapshot_excludes_concurrent_commits_and_restores_files():
     async def check_empty():
         source_conn = await asyncpg.connect(database=source, **connection_args)
         target_conn = await asyncpg.connect(database=target, **connection_args)
+        scheduled_conn = await asyncpg.connect(database=scheduled_target, **connection_args)
         try:
             assert await source_conn.fetchval("SELECT count(*) FROM users") == 0
             assert (
@@ -55,9 +60,15 @@ def test_backup_snapshot_excludes_concurrent_commits_and_restores_files():
                 )
                 == 0
             )
+            assert (
+                await scheduled_conn.fetchval(
+                    "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
+                )
+            ) == 0
         finally:
             await source_conn.close()
             await target_conn.close()
+            await scheduled_conn.close()
 
     asyncio.run(check_empty())
     owner, first, second = uuid4(), uuid4().hex, uuid4().hex
@@ -226,11 +237,76 @@ def test_backup_snapshot_excludes_concurrent_commits_and_restores_files():
                     await task
             with pytest.raises(RuntimeError, match="Backup failed"):
                 await run_backup(backups, root / "missing-key")
+            real_popen = subprocess.Popen
+            for program in (
+                "import time; time.sleep(60)",
+                "import os,time; os.write(1,b'partial'); os.close(1); time.sleep(60)",
+            ):
+                children = []
+
+                def stalled_dump(_command, **kwargs):
+                    child = real_popen([sys.executable, "-c", program], **kwargs)
+                    children.append(child)
+                    return child
+
+                async with async_session() as session:
+                    failed_before = len(
+                        (
+                            await session.scalars(
+                                select(BackupRun).where(BackupRun.status == "failed")
+                            )
+                        ).all()
+                    )
+                existing_backups = set(backups.iterdir())
+                with (
+                    patch.object(backup_snapshot.subprocess, "Popen", side_effect=stalled_dump),
+                    patch.object(backup_snapshot, "PG_DUMP_TIMEOUT_SECONDS", 0.2),
+                ):
+                    with pytest.raises(RuntimeError, match="Backup failed"):
+                        await asyncio.wait_for(run_backup(backups, key_path), timeout=10)
+                assert children and children[0].poll() is not None
+                assert set(backups.iterdir()) == existing_backups
+                with file_consistency_lock(exclusive=True):
+                    pass
+                async with async_session() as session:
+                    failed_after = len(
+                        (
+                            await session.scalars(
+                                select(BackupRun).where(BackupRun.status == "failed")
+                            )
+                        ).all()
+                    )
+                    assert failed_after == failed_before + 1
             today = datetime.now(UTC).date()
             with pytest.raises(RuntimeError, match="Backup failed"):
                 await run_backup(backups, root / "missing-key", scheduled_date=today)
+            existing_backups = set(backups.iterdir())
             assert await run_backup(backups, key_path, scheduled_date=today)
+            (scheduled_backup,) = set(backups.iterdir()) - existing_backups
             assert not await run_backup(backups, key_path, scheduled_date=today)
+            scheduled_stage = prepare_restore(scheduled_backup, read_key(key_path), root)
+            assert (scheduled_stage / "files" / first).read_bytes() == first_content
+            assert (scheduled_stage / "files" / second).read_bytes() == second_content
+            subprocess.run(
+                [
+                    "pg_restore",
+                    "--exit-on-error",
+                    "--no-owner",
+                    "--no-privileges",
+                    "--dbname",
+                    scheduled_target,
+                    str(scheduled_stage / "database.dump"),
+                ],
+                env=env,
+                check=True,
+                timeout=60,
+            )
+            conn = await asyncpg.connect(database=scheduled_target, **connection_args)
+            try:
+                restored = await conn.fetch("SELECT storage_key FROM documents")
+                assert {row["storage_key"] for row in restored} == {first, second}
+            finally:
+                await conn.close()
 
             async with async_session() as session:
                 interrupted = await session.get(BackupRun, interrupted_id)

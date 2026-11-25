@@ -11,6 +11,7 @@ import os
 import re
 import stat
 import subprocess
+import threading
 from pathlib import Path
 from uuid import uuid4
 
@@ -24,6 +25,28 @@ from app.modules.operations.backup_archive import DocumentFile, write_bundle
 from app.modules.operations.backup_crypto import EncryptingWriter, verify_stream
 
 SNAPSHOT = re.compile(r"[0-9A-Fa-f-]+\Z")
+PG_DUMP_TIMEOUT_SECONDS = 3600
+
+
+def _kill_stalled_dump(process, timed_out: threading.Event) -> None:
+    if process.poll() is None:
+        timed_out.set()
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+
+
+class _TimedDumpReader:
+    def __init__(self, stream, timed_out: threading.Event):
+        self.stream = stream
+        self.timed_out = timed_out
+
+    def read(self, size: int) -> bytes:
+        data = self.stream.read(size)
+        if self.timed_out.is_set():
+            raise TimeoutError("PostgreSQL backup timed out")
+        return data
 
 
 def _pg_environment() -> dict[str, str]:
@@ -71,14 +94,33 @@ async def _capture(destination, key: bytes, root: Path) -> None:
                     stderr=subprocess.DEVNULL,
                     env=_pg_environment(),
                 )
+                timed_out = threading.Event()
+                watchdog = threading.Timer(
+                    PG_DUMP_TIMEOUT_SECONDS, _kill_stalled_dump, args=(process, timed_out)
+                )
+                watchdog.daemon = True
+                watchdog.start()
                 try:
                     writer = EncryptingWriter(destination, key)
                     assert process.stdout is not None
-                    write_bundle(writer, process.stdout, documents, root)
-                    if process.wait() != 0:
-                        raise RuntimeError("PostgreSQL backup failed")
+
+                    def finish_dump() -> None:
+                        if process.wait() != 0 or timed_out.is_set():
+                            raise RuntimeError("PostgreSQL backup failed")
+                        watchdog.cancel()
+                        watchdog.join()
+
+                    write_bundle(
+                        writer,
+                        _TimedDumpReader(process.stdout, timed_out),
+                        documents,
+                        root,
+                        finish_dump,
+                    )
                     writer.finish()
                 finally:
+                    watchdog.cancel()
+                    watchdog.join()
                     if process.stdout is not None:
                         process.stdout.close()
                     if process.poll() is None:

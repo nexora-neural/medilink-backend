@@ -13,6 +13,7 @@ import os
 import re
 import stat
 import tarfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
@@ -37,7 +38,11 @@ def _entry(archive: tarfile.TarFile, name: str, payload: bytes) -> None:
 
 
 def write_bundle(
-    writer: EncryptingWriter, dump: BinaryIO, documents: list[DocumentFile], root: Path
+    writer: EncryptingWriter,
+    dump: BinaryIO,
+    documents: list[DocumentFile],
+    root: Path,
+    finish_dump: Callable[[], None] | None = None,
 ) -> None:
     """Write bounded chunks; fail closed on missing, malformed, or changed files."""
     if not hasattr(os, "O_NOFOLLOW"):
@@ -51,6 +56,8 @@ def write_bundle(
             dump_parts += 1
         if not dump_parts:
             raise ValueError("Database dump is empty")
+        if finish_dump is not None:
+            finish_dump()
         file_manifest = []
         for doc in sorted(documents, key=lambda item: item.key):
             if (

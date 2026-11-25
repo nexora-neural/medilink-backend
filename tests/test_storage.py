@@ -1,5 +1,7 @@
 """Focused smoke tests for ML-36 private file storage. No PostgreSQL required."""
 
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -14,6 +16,23 @@ from app.modules.documents import storage
 
 
 class StorageTests(unittest.IsolatedAsyncioTestCase):
+    def test_api_imports_when_fcntl_is_unavailable(self):
+        result = subprocess.run(
+            [sys.executable, "-c", "import sys; sys.modules['fcntl'] = None; import app.main"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_unavailable_lock_allows_cleanup_but_rejects_backup(self):
+        with patch.object(storage, "fcntl", None):
+            with storage.file_consistency_lock(exclusive=True):
+                pass
+            with self.assertRaisesRegex(OSError, "POSIX"):
+                with storage.file_consistency_lock(exclusive=False):
+                    pass
+
     async def test_private_file_round_trip_and_cleanup(self):
         with tempfile.TemporaryDirectory() as root:
             with patch.object(settings, "private_upload_dir", root):

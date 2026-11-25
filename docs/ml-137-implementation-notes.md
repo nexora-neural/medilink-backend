@@ -15,6 +15,10 @@ closed if any referenced document is missing or its size or SHA-256 does not
 match its database record (including records without a SHA-256).
 The application, backup and reconciliation processes must run as the same OS
 user so they can share the owned, private lock file.
+The API can start on Windows without `fcntl`; the backup worker requires POSIX
+locking and is not supported on Windows. If `pg_dump` is still running after
+one hour, the worker stops it, records the attempt as failed and releases the
+backup and storage locks; the daily scheduler can then retry.
 The encrypted format limits the complete plaintext archive to 2^36 - 32 bytes
 and its manifest to 1 MiB; attempts beyond either limit fail without publishing
 a successful backup.
@@ -95,10 +99,11 @@ backup. Recovery is an operator-driven process, not an automatic in-place restor
 `tests/test_backup_live_postgres.py` verifies a synthetic upload committed after
 the exported snapshot: the restored database and files include the earlier
 document and exclude the later one. It is skipped unless explicitly enabled.
-Provision two disposable databases with names beginning `ml137_test_` on a local
+Provision three disposable databases with names beginning `ml137_test_` on a local
 `/private/tmp` PostgreSQL socket; migrate the empty source with
 `alembic upgrade heads`, leave the target empty, and set `DB_HOST`, `DB_PORT`,
-`DB_USER`, `DB_NAME`, `ML137_RESTORE_TEST_DATABASE`, and
+`DB_USER`, `DB_NAME`, `ML137_RESTORE_TEST_DATABASE`,
+`ML137_SCHEDULED_RESTORE_TEST_DATABASE`, and
 `ML137_LIVE_BACKUP_TEST=1` before running that test. The test verifies its source
 contains no users and its target contains no tables, and leaves its synthetic
 database records in place. Never point it at a project database.
