@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.consent.models import AccessGrant, GrantCategory
 from app.modules.consent.schemas import GrantCategoryName, GrantListQuery
+from app.modules.identity.models import User
 from app.modules.profiles.models import PatientProfile
 
 
@@ -85,3 +86,10 @@ async def categories_by_grant(
         for grant_id, category in result:
             categories[grant_id].append(category)
     return categories
+
+
+async def doctor_names(db: AsyncSession, doctor_ids: list[UUID]) -> dict[UUID, str]:
+    if not doctor_ids:
+        return {}
+    rows = await db.execute(select(User.id, User.display_name).where(User.id.in_(doctor_ids)))
+    return dict(rows.all())

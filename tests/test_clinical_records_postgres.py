@@ -230,6 +230,23 @@ class ClinicalPostgresTests(IsolatedAsyncioTestCase):
         response = await self.post(self.body | {"consultation_id": str(consultation.id)})
         self.assertEqual(response.status_code, 404)
 
+    async def test_active_grant_includes_patient_records_created_after_grant(self):
+        await self.context(category="history_allergies")
+        created = await self.post(
+            self.body | {"title": "Patient record created after grant"}
+        )
+        self.assertEqual(created.status_code, 201, created.text)
+
+        self.actor = self.doctor
+        listing = await self.client.get(self.path)
+
+        self.assertEqual(listing.status_code, 200, listing.text)
+        self.assertEqual(listing.json()["total"], 1)
+        self.assertEqual(listing.json()["items"][0]["id"], created.json()["id"])
+        self.assertEqual(
+            listing.json()["items"][0]["title"], "Patient record created after grant"
+        )
+
     async def test_wrong_category_is_not_access(self):
         _, consultation = await self.context(category="prescriptions")
         self.actor = self.doctor

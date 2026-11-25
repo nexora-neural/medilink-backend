@@ -93,8 +93,14 @@ async def list_grants(
     now = datetime.now(UTC)
     grants, total = await repository.list_owned_grants(db, actor.id, query, now)
     categories = await repository.categories_by_grant(db, [grant.id for grant in grants])
+    names = await repository.doctor_names(db, [grant.professional_user_id for grant in grants])
     return GrantDetailPage(
-        items=[grant_detail(grant, categories.get(grant.id, []), now) for grant in grants],
+        items=[
+            grant_detail(grant, categories.get(grant.id, []), now).model_copy(
+                update={"doctor_display_name": names.get(grant.professional_user_id)}
+            )
+            for grant in grants
+        ],
         page=query.page,
         page_size=query.page_size,
         total=total,
