@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.clinical_records.models import RecordSource
 from app.modules.laboratory.models import ReportStatus
@@ -36,6 +36,7 @@ class ReportsRead(BaseModel):
     created_at: datetime
     supersedes_id: UUID | None
     correction_reason: str | None
+    withdrawal_reason: str | None = None
 
 
 class ReportsReadPage(BaseModel):
@@ -43,3 +44,19 @@ class ReportsReadPage(BaseModel):
     page: int
     page_size: int
     total: int
+
+
+class ReportReasonInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def reject_null(cls, value: str) -> str:
+        if "\x00" in value:
+            raise ValueError("Reason must not contain a null character.")
+        return value
+
+
+class ReportVersionInput(ReportInput, ReportReasonInput):
+    pass
