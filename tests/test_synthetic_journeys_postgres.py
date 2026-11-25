@@ -698,6 +698,7 @@ class DemoSeedPostgresTests(IsolatedAsyncioTestCase):
         from app.main import app
         from app.modules.identity.auth import get_current_user
         from app.modules.identity.models import User
+        from app.modules.identity.request_limits import require_authenticated_rate_limit
 
         await seed(self.connection, datetime.now(UTC))
         session = AsyncSession(
@@ -717,6 +718,7 @@ class DemoSeedPostgresTests(IsolatedAsyncioTestCase):
             {
                 get_session: session_override,
                 get_current_user: actor_override,
+                require_authenticated_rate_limit: lambda: None,
             },
         )
         overrides.start()
