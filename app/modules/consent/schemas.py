@@ -75,6 +75,7 @@ class AccessGrantsRead(BaseModel):
 class GrantDetail(BaseModel):
     grant: AccessGrantsRead
     categories: list[GrantCategoryName]
+    doctor_display_name: str | None = None
 
 
 class GrantDetailPage(BaseModel):
