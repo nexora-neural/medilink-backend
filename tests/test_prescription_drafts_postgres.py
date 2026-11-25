@@ -646,3 +646,174 @@ class PrescriptionDraftPostgresTests(IsolatedAsyncioTestCase):
             response = await client.get(collection_url)
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(response.json()["total"], 1)
+
+    async def test_issue_doctor_draft_persists_and_retry_is_idempotent(self):
+        body = self.payload().model_copy(
+            update={
+                "consultation_id": self.consultation.id,
+                "starts_on": date(2026, 11, 25),
+                "ends_on": date(2026, 11, 27),
+            }
+        )
+
+        created = await service.create_draft(
+            session=self.db,
+            user=self.doctor,
+            request=self.request,
+            patient_id=self.patient_id,
+            payload=body,
+        )
+        draft_id = created.prescription.id
+        draft_version = created.prescription.version
+
+        issued = await service.issue_prescription(
+            session=self.db,
+            user=self.doctor,
+            request=self.request,
+            prescription_id=draft_id,
+        )
+
+        self.assertEqual(issued.prescription.status, "active")
+        self.assertIsNotNone(issued.prescription.issued_at)
+        self.assertEqual(issued.prescription.version, draft_version + 1)
+        issued_at = issued.prescription.issued_at
+
+        retried = await service.issue_prescription(
+            session=self.db,
+            user=self.doctor,
+            request=self.request,
+            prescription_id=draft_id,
+        )
+
+        self.assertEqual(retried.prescription.issued_at, issued_at)
+        self.assertEqual(retried.prescription.version, draft_version + 1)
+
+        self.db.expire_all()
+
+        stored = await repository.find_prescription(self.db, draft_id)
+        events = list(
+            (
+                await self.db.scalars(
+                    select(AuditEvent).where(
+                        AuditEvent.target_id == draft_id,
+                        AuditEvent.action == "prescription.issued",
+                    )
+                )
+            ).all()
+        )
+
+        self.assertEqual(stored.status, "active")
+        self.assertEqual(stored.issued_at, issued_at)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].metadata_["new_version"], draft_version + 1)
+
+    async def test_issue_incomplete_draft_keeps_saved_draft_unchanged(self):
+        # Missing start/end dates: valid draft, invalid issued order.
+        body = self.payload().model_copy(update={"consultation_id": self.consultation.id})
+
+        created = await service.create_draft(
+            session=self.db,
+            user=self.doctor,
+            request=self.request,
+            patient_id=self.patient_id,
+            payload=body,
+        )
+        draft_id = created.prescription.id
+        draft_version = created.prescription.version
+
+        with self.assertRaises(AuthenticationError) as caught:
+            await service.issue_prescription(
+                session=self.db,
+                user=self.doctor,
+                request=self.request,
+                prescription_id=draft_id,
+            )
+
+        self.assertEqual(caught.exception.status_code, 422)
+
+        self.db.expire_all()
+
+        stored = await repository.find_prescription(self.db, draft_id)
+        issue_event = await self.db.scalar(
+            select(AuditEvent.id).where(
+                AuditEvent.target_id == draft_id,
+                AuditEvent.action == "prescription.issued",
+            )
+        )
+
+        self.assertEqual(stored.status, "draft")
+        self.assertIsNone(stored.issued_at)
+        self.assertEqual(stored.version, draft_version)
+        self.assertIsNone(issue_event)
+
+    async def test_http_doctor_issue_and_retry(self):
+        body = self.payload().model_copy(
+            update={
+                "consultation_id": self.consultation.id,
+                "starts_on": date(2026, 11, 25),
+                "ends_on": date(2026, 11, 27),
+            }
+        )
+        created = await service.create_draft(
+            session=self.db,
+            user=self.doctor,
+            request=self.request,
+            patient_id=self.patient_id,
+            payload=body,
+        )
+        draft_id = created.prescription.id
+        original_version = created.prescription.version
+
+        app = FastAPI()
+        app.include_router(router, prefix="/api/v1")
+
+        async def test_session():
+            yield self.db
+
+        async def test_user():
+            return self.doctor
+
+        app.dependency_overrides[get_session] = test_session
+        app.dependency_overrides[get_current_user] = test_user
+
+        @app.middleware("http")
+        async def request_id_middleware(request, call_next):
+            request.state.request_id = str(uuid4())
+            return await call_next(request)
+
+        transport = ASGITransport(app=app)
+
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            issue_url = f"/api/v1/prescriptions/{draft_id}/issue"
+
+            # Explicit POST issues the saved draft; no request body needed.
+            response = await client.post(issue_url)
+            self.assertEqual(response.status_code, 200, response.text)
+
+            issued = response.json()["prescription"]
+            self.assertEqual(issued["status"], "active")
+            self.assertIsNotNone(issued["issued_at"])
+            self.assertEqual(issued["version"], original_version + 1)
+
+            # Retrying must return the same issued state.
+            response = await client.post(issue_url)
+            self.assertEqual(response.status_code, 200, response.text)
+
+            retried = response.json()["prescription"]
+            self.assertEqual(retried["issued_at"], issued["issued_at"])
+            self.assertEqual(retried["version"], issued["version"])
+
+        events = list(
+            (
+                await self.db.scalars(
+                    select(AuditEvent).where(
+                        AuditEvent.target_id == draft_id,
+                        AuditEvent.action == "prescription.issued",
+                    )
+                )
+            ).all()
+        )
+        self.assertEqual(len(events), 1)

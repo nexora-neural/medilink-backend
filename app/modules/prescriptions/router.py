@@ -267,3 +267,28 @@ async def delete_prescription_draft(
         prescription_id=prescription_id,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/prescriptions/{prescription_id}/issue",
+    response_model=PrescriptionDetail,
+    status_code=status.HTTP_200_OK,
+    responses={
+        403: {"description": "Access denied"},
+        404: {"description": "Prescription not found"},
+        409: {"description": "Invalid prescription state"},
+        422: {"description": "Incomplete prescription details"},
+    },
+)
+async def issue_doctor_prescription(
+    prescription_id: UUID,
+    request: Request,
+    session: SessionDep,
+    current_user: UserDep,
+) -> PrescriptionDetail:
+    return await service.issue_prescription(
+        session=session,
+        user=current_user,
+        request=request,
+        prescription_id=prescription_id,
+    )

@@ -807,15 +807,6 @@ async def issue_prescription(
                 "Only never-issued drafts can be issued.",
             )
 
-        # Linked replacements need additional atomic lifecycle handling.
-        # Keep them blocked until that handling is implemented.
-        if prescription.previous_prescription_id is not None:
-            raise issue_error(
-                409,
-                "INVALID_STATE",
-                "Linked replacement issuance is not available yet.",
-            )
-
         detail = await build_prescription_detail(session, prescription)
 
         item_fields = {
@@ -865,8 +856,82 @@ async def issue_prescription(
             payload=content,
         )
 
+        predecessor = None
+
+        if prescription.previous_prescription_id is not None:
+            if prescription.previous_prescription_id == prescription.id:
+                raise issue_error(
+                    409,
+                    "INVALID_STATE",
+                    "A prescription cannot replace itself.",
+                )
+
+            predecessor = await repository.lock_prescription(
+                session,
+                prescription.previous_prescription_id,
+            )
+
+            if predecessor is None or predecessor.patient_user_id != prescription.patient_user_id:
+                raise issue_error(
+                    409,
+                    "INVALID_STATE",
+                    "The linked prescription is unavailable.",
+                )
+
+            predecessor_source = getattr(predecessor.source, "value", predecessor.source)
+
+            if predecessor_source == "doctor":
+                if predecessor.prescriber_user_id != user.id:
+                    raise forbidden(request)
+            elif predecessor_source != "patient":
+                raise forbidden(request)
+
+            if (
+                predecessor.status
+                not in {
+                    PrescriptionStatus.ACTIVE,
+                    PrescriptionStatus.COMPLETED,
+                }
+                or predecessor.issued_at is None
+            ):
+                raise issue_error(
+                    409,
+                    "INVALID_STATE",
+                    "The linked prescription cannot be replaced.",
+                )
+
         previous_version = prescription.version
         now = datetime.now(UTC)
+
+        if predecessor is not None:
+            predecessor_status = getattr(predecessor.status, "value", predecessor.status)
+            predecessor_version = predecessor.version
+
+            predecessor.status = PrescriptionStatus.SUPERSEDED
+            predecessor.updated_at = now
+            predecessor.version += 1
+
+            await repository.cancel_superseded_medication(
+                session,
+                prescription_id=predecessor.id,
+                now=now,
+            )
+
+            await append_event(
+                session,
+                actor_user_id=user.id,
+                action="prescription.superseded",
+                target_type="prescriptions",
+                target_id=predecessor.id,
+                outcome="success",
+                request_id=request_id,
+                metadata={
+                    "previous_status": predecessor_status,
+                    "status": "superseded",
+                    "previous_version": predecessor_version,
+                    "new_version": predecessor.version,
+                },
+            )
 
         prescription.status = PrescriptionStatus.ACTIVE
         prescription.issued_at = now
@@ -890,6 +955,7 @@ async def issue_prescription(
                 "previous_version": previous_version,
                 "new_version": prescription.version,
                 "item_count": len(content.items),
+                **({"supersedes_id": str(predecessor.id)} if predecessor is not None else {}),
             },
         )
 
