@@ -137,6 +137,34 @@ class PrescriptionInput(BaseModel):
         return self
 
 
+class PrescriptionIssueItemInput(PrescriptionItemInput):
+    """Complete medication fields required before doctor issuance."""
+
+    route: str = Field(min_length=1, max_length=100)
+    duration_days: int = Field(ge=1)
+    quantity: Decimal = Field(
+        gt=0,
+        max_digits=12,
+        decimal_places=3,
+    )
+    quantity_unit: Literal["tablet", "capsule", "mL"]
+
+    @field_validator("route")
+    @classmethod
+    def require_issue_route(cls, value: str | None) -> str:
+        if value is None or not value.strip():
+            raise ValueError("Route is required before issuing.")
+        return value.strip()
+
+
+class PrescriptionIssueContent(PrescriptionInput):
+    """Validate saved draft content before changing its state."""
+
+    starts_on: date
+    ends_on: date
+    items: list[PrescriptionIssueItemInput] = Field(min_length=1)
+
+
 class PrescriptionRecordRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
