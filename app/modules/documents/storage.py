@@ -68,9 +68,17 @@ async def delete(key: str) -> None:
     await run_in_threadpool(_delete, key)
 
 
-def get_download_path(key: str) -> Path:
+def get_download_path(key: str, expected_size: int | None = None) -> Path:
     path = _path(key)
-    mode = path.lstat().st_mode
-    if not stat.S_ISREG(mode):
-        raise OSError("Stored document is not a regular file")
+    # Opening also detects unreadable files; lstat alone only proves existence.
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    fd = os.open(path, flags)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or path.is_symlink():
+            raise OSError("Stored document is not a regular file")
+        if expected_size is not None and info.st_size != expected_size:
+            raise OSError("Stored document size does not match metadata")
+    finally:
+        os.close(fd)
     return path

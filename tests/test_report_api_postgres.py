@@ -7,10 +7,13 @@ All synthetic database changes are isolated inside an outer rolled-back transact
 
 import hashlib
 import os
+import tempfile
+import time
 from datetime import UTC, date, datetime, timedelta
 from io import BytesIO
+from pathlib import Path
 from unittest import IsolatedAsyncioTestCase, skipUnless
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI
@@ -19,12 +22,14 @@ from pypdf import PdfWriter
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from app.core.config import settings
 from app.database import models as _models  # noqa: F401 - register all ORM tables
 from app.database.session import get_session
 from app.modules.audit.models import AuditEvent
 from app.modules.documents import service as document_service
 from app.modules.documents.errors import DocumentError, document_error_handler
 from app.modules.documents.models import Document
+from app.modules.documents.reconcile import MIN_AGE_SECONDS, inventory, quarantine
 from app.modules.documents.router import router as document_router
 from app.modules.identity.auth import get_current_user
 from app.modules.identity.models import Role, User, UserRole
@@ -124,9 +129,11 @@ class ReportPostgresTests(IsolatedAsyncioTestCase):
             document_service.storage,
             save=self.storage["save"],
             delete=self.storage["delete"],
+            get_download_path=Mock(return_value="synthetic-private-file"),
         )
         storage_patch.start()
         self.addCleanup(storage_patch.stop)
+        self.storage_patch = storage_patch
 
     async def create_user(self, code):
         role = await self.db.scalar(select(Role).where(Role.code == code))
@@ -259,6 +266,134 @@ class ReportPostgresTests(IsolatedAsyncioTestCase):
             await self.count(Notification, Notification.user_id == self.patient_id),
             0,
         )
+
+    async def test_missing_content_does_not_publish_report(self):
+        self.actor_id = self.patient_id
+        upload = await self.upload()
+        self.assertEqual(upload.status_code, 201, upload.text)
+        document_id = UUID(upload.json()["id"])
+        with patch.object(
+            document_service.storage, "get_download_path", side_effect=FileNotFoundError
+        ):
+            response = await self.publish(document_id)
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(await self.count(Report, Report.document_id == document_id), 0)
+
+    async def test_truncated_file_cannot_be_published(self):
+        self.storage_patch.stop()
+        self.actor_id = self.patient_id
+        with (
+            tempfile.TemporaryDirectory() as root,
+            patch.object(settings, "private_upload_dir", root),
+        ):
+            upload = await self.upload()
+            self.assertEqual(upload.status_code, 201, upload.text)
+            document_id = UUID(upload.json()["id"])
+            doc = await self.db.get(Document, document_id)
+            path = document_service.storage.get_download_path(doc.storage_key)
+            path.write_bytes(b"")
+            response = await self.publish(document_id)
+            self.assertEqual(response.status_code, 409, response.text)
+            self.assertEqual(await self.count(Report, Report.document_id == document_id), 0)
+
+    async def test_real_private_file_loss_prevents_publish(self):
+        self.storage_patch.stop()
+        self.actor_id = self.patient_id
+        with (
+            tempfile.TemporaryDirectory() as root,
+            patch.object(settings, "private_upload_dir", root),
+        ):
+            upload = await self.upload()
+            self.assertEqual(upload.status_code, 201, upload.text)
+            document_id = UUID(upload.json()["id"])
+            doc = await self.db.get(Document, document_id)
+            path = document_service.storage.get_download_path(doc.storage_key)
+            self.assertEqual(path.read_bytes(), self.pdf)
+            path.unlink()
+            response = await self.publish(document_id)
+            self.assertEqual(response.status_code, 409, response.text)
+            self.assertEqual(await self.count(Report, Report.document_id == document_id), 0)
+
+    async def test_commit_failure_retains_orphan_without_publishing(self):
+        self.storage_patch.stop()
+        self.actor_id = self.patient_id
+        with (
+            tempfile.TemporaryDirectory() as root,
+            patch.object(settings, "private_upload_dir", root),
+        ):
+            with patch.object(self.db, "commit", side_effect=RuntimeError("commit failed")):
+                response = await self.upload()
+            self.assertEqual(response.status_code, 500, response.text)
+            self.assertEqual(
+                await self.count(Document, Document.patient_user_id == self.patient_id), 0,
+            )
+            self.assertEqual(await self.count(Report, Report.patient_user_id == self.patient_id), 0)
+            files = list(Path(root).iterdir())
+            self.assertEqual(len(files), 1)
+            self.assertEqual(files[0].read_bytes(), self.pdf)
+            old = time.time() - MIN_AGE_SECONDS - 5
+            os.utime(files[0], (old, old))
+            rows = await self.db.execute(text("SELECT storage_key, id FROM documents"))
+            refs = {row.storage_key: str(row.id) for row in rows}
+            orphans, missing = inventory(Path(root), refs, time.time())
+            self.assertEqual(orphans, [files[0].name])
+            self.assertEqual(missing, [])
+            quarantine(Path(root), orphans)
+            self.assertEqual((Path(root) / ".quarantine" / files[0].name).read_bytes(), self.pdf)
+            self.assertEqual(inventory(Path(root), refs, time.time()), ([], []))
+
+    async def test_private_document_content_rejects_other_patient(self):
+        self.storage_patch.stop()
+        self.actor_id = self.patient_id
+        with (
+            tempfile.TemporaryDirectory() as root,
+            patch.object(settings, "private_upload_dir", root),
+        ):
+            upload = await self.upload()
+            self.assertEqual(upload.status_code, 201, upload.text)
+            document_id = UUID(upload.json()["id"])
+            self.actor_id = self.other_patient_id
+            response = await self.client.get(f"/api/v1/documents/{document_id}/content")
+            self.assertIn(response.status_code, (403, 404), response.text)
+            self.assertNotEqual(response.content, self.pdf)
+
+    async def test_lost_commit_response_keeps_committed_file(self):
+        self.storage_patch.stop()
+        self.actor_id = self.patient_id
+        real_commit = self.db.commit
+
+        async def commit_then_disconnect():
+            await real_commit()
+            raise OSError("simulated lost commit response")
+
+        with (
+            tempfile.TemporaryDirectory() as root,
+            patch.object(settings, "private_upload_dir", root),
+            patch.object(self.db, "commit", side_effect=commit_then_disconnect),
+        ):
+            response = await self.upload()
+            self.assertEqual(response.status_code, 500, response.text)
+            docs = (await self.db.scalars(
+                select(Document).where(Document.patient_user_id == self.patient_id)
+            )).all()
+            self.assertEqual(len(docs), 1)
+            path = document_service.storage.get_download_path(docs[0].storage_key)
+            self.assertEqual(path.read_bytes(), self.pdf)
+            old = time.time() - MIN_AGE_SECONDS - 5
+            os.utime(path, (old, old))
+            rows = await self.db.execute(text("SELECT storage_key, id FROM documents"))
+            refs = {row.storage_key: str(row.id) for row in rows}
+            self.assertEqual(inventory(Path(root), refs, time.time()), ([], []))
+
+    async def test_file_save_failure_does_not_publish_metadata(self):
+        self.actor_id = self.patient_id
+        with patch.object(document_service.storage, "save", side_effect=OSError("disk failure")):
+            response = await self.upload()
+        self.assertEqual(response.status_code, 500, response.text)
+        self.assertEqual(
+            await self.count(Document, Document.patient_user_id == self.patient_id), 0,
+        )
+        self.assertEqual(await self.count(Report, Report.patient_user_id == self.patient_id), 0)
 
     async def test_patient_upload_publish_and_own_list(self):
         self.actor_id = self.patient_id
