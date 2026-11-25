@@ -20274,6 +20274,10 @@
           "grant": {
             "$ref": "#/components/schemas/AccessGrantsRead"
           },
+          "doctor_display_name": {
+            "type": "string",
+            "nullable": true
+          },
           "categories": {
             "type": "array",
             "items": {
@@ -23171,6 +23175,7 @@
           "file",
           "document_type"
         ]
+      },
       "BackupRead": {
         "additionalProperties": false,
         "properties": {

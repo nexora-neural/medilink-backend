@@ -1319,6 +1319,7 @@ This response schema extends `IntegrationAdminSubmissionRead` with the idempoten
 |---|---|---|
 | `grant` | AccessGrantsRead | Yes |
 | `categories` | array<string: history_allergies, prescriptions, reports, measurements_vaccinations, medication_logs> | Yes |
+| `doctor_display_name` | string; nullable | No |
 
 ### QueueEntry
 
