@@ -53,6 +53,7 @@ class BackupCryptoTests(unittest.TestCase):
         with self.assertRaises((InvalidTag, ValueError)):
             verify_stream(BytesIO(encrypted[:-1]), key)
 
+    @unittest.skipUnless(os.name == "posix", "Key-file permission checks require POSIX")
     def test_key_file_requires_private_permissions_and_no_symlink(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "key"

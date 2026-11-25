@@ -11,6 +11,7 @@ from app.modules.operations.backup_archive import DocumentFile, write_bundle
 from app.modules.operations.backup_crypto import EncryptingWriter, decrypt_to_staging
 
 
+@unittest.skipUnless(os.name == "posix", "Backup archives require POSIX file operations")
 class BackupArchiveTests(unittest.TestCase):
     def test_archive_includes_database_and_matching_files(self):
         with tempfile.TemporaryDirectory() as directory:

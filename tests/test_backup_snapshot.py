@@ -9,6 +9,7 @@ from app.modules.operations import backup_snapshot
 from app.modules.operations.backup_crypto import EncryptingWriter, verify_stream
 
 
+@unittest.skipUnless(os.name == "posix", "Backup publication requires POSIX file permissions")
 class BackupPublicationTests(unittest.TestCase):
     def test_success_is_authenticated_and_never_overwrites_existing_backup(self):
         with tempfile.TemporaryDirectory() as directory:

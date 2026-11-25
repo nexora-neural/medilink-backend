@@ -11,6 +11,7 @@ from app.modules.operations.backup_crypto import EncryptingWriter, encrypt_strea
 from app.modules.operations.backup_restore import prepare_restore
 
 
+@unittest.skipUnless(os.name == "posix", "Backup restore requires POSIX file permissions")
 class RestoreTests(unittest.TestCase):
     def test_valid_backup_and_wrong_key(self):
         with tempfile.TemporaryDirectory() as directory:

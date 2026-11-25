@@ -1,5 +1,6 @@
 """Focused smoke tests for ML-36 private file storage. No PostgreSQL required."""
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -53,6 +54,7 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(ValueError):
                     storage.get_download_path("../sensitive.txt")
 
+    @unittest.skipUnless(os.name == "posix", "Creating symlinks requires privileges on Windows")
     def test_rejects_symlink_to_private_file(self):
         with tempfile.TemporaryDirectory() as root:
             with patch.object(settings, "private_upload_dir", root):
@@ -88,6 +90,7 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
                     any(p.name != ".backup-consistency.lock" for p in Path(root).iterdir())
                 )
 
+    @unittest.skipUnless(os.name == "posix", "Backup locking requires POSIX")
     def test_backup_lock_blocks_file_removal(self):
         with tempfile.TemporaryDirectory() as root:
             with patch.object(settings, "private_upload_dir", root):
