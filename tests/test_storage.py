@@ -1,5 +1,10 @@
 """Focused smoke tests for ML-36 private file storage. No PostgreSQL required."""
+
+import os
+import subprocess
+import sys
 import tempfile
+import threading
 import unittest
 from io import BytesIO
 from pathlib import Path
@@ -12,6 +17,23 @@ from app.modules.documents import storage
 
 
 class StorageTests(unittest.IsolatedAsyncioTestCase):
+    def test_api_imports_when_fcntl_is_unavailable(self):
+        result = subprocess.run(
+            [sys.executable, "-c", "import sys; sys.modules['fcntl'] = None; import app.main"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_unavailable_lock_allows_cleanup_but_rejects_backup(self):
+        with patch.object(storage, "fcntl", None):
+            with storage.file_consistency_lock(exclusive=True):
+                pass
+            with self.assertRaisesRegex(OSError, "POSIX"):
+                with storage.file_consistency_lock(exclusive=False):
+                    pass
+
     async def test_private_file_round_trip_and_cleanup(self):
         with tempfile.TemporaryDirectory() as root:
             with patch.object(settings, "private_upload_dir", root):
@@ -32,6 +54,7 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(ValueError):
                     storage.get_download_path("../sensitive.txt")
 
+    @unittest.skipUnless(os.name == "posix", "Creating symlinks requires privileges on Windows")
     def test_rejects_symlink_to_private_file(self):
         with tempfile.TemporaryDirectory() as root:
             with patch.object(settings, "private_upload_dir", root):
@@ -47,7 +70,9 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
                 file = UploadFile(file=BytesIO(b""), filename="empty.pdf")
                 with self.assertRaises(ValueError):
                     await storage.save(file)
-                self.assertEqual(list(Path(root).iterdir()), [])
+                self.assertFalse(
+                    any(p.name != ".backup-consistency.lock" for p in Path(root).iterdir())
+                )
 
     async def test_read_failure_removes_partial_file(self):
         class FailingFile(BytesIO):
@@ -61,4 +86,42 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
                 file = UploadFile(file=FailingFile(b"private content"), filename="x.pdf")
                 with self.assertRaisesRegex(OSError, "simulated read failure"):
                     await storage.save(file)
-                self.assertEqual(list(Path(root).iterdir()), [])
+                self.assertFalse(
+                    any(p.name != ".backup-consistency.lock" for p in Path(root).iterdir())
+                )
+
+    @unittest.skipUnless(os.name == "posix", "Backup locking requires POSIX")
+    def test_backup_lock_blocks_file_removal(self):
+        with tempfile.TemporaryDirectory() as root:
+            with patch.object(settings, "private_upload_dir", root):
+                key = "a" * 32
+                path = Path(root) / key
+                path.write_bytes(b"synthetic")
+                started = threading.Event()
+                finished = threading.Event()
+
+                def remove():
+                    started.set()
+                    storage._delete(key)
+                    finished.set()
+
+                with storage.file_consistency_lock(exclusive=False):
+                    worker = threading.Thread(target=remove)
+                    worker.start()
+                    self.assertTrue(started.wait(2))
+                    self.assertFalse(finished.wait(0.1))
+                    self.assertTrue(path.exists())
+                worker.join(timeout=2)
+                self.assertTrue(finished.is_set())
+                self.assertFalse(path.exists())
+
+    async def test_storage_key_collision_never_deletes_existing_file(self):
+        with tempfile.TemporaryDirectory() as root:
+            with patch.object(settings, "private_upload_dir", root):
+                existing = Path(root) / ("a" * 32)
+                existing.write_bytes(b"original")
+                with patch.object(storage, "uuid4") as generated:
+                    generated.return_value.hex = "a" * 32
+                    with self.assertRaises(FileExistsError):
+                        await storage.save(UploadFile(file=BytesIO(b"new"), filename="x.pdf"))
+                self.assertEqual(existing.read_bytes(), b"original")
