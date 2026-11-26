@@ -428,10 +428,16 @@ class ReportPostgresTests(IsolatedAsyncioTestCase):
         request_id, document_id = await self.staged()
         key = f"ml116-{uuid4()}"
 
-        response = await self.publish(document_id, request_id, key=key)
+        response = await self.publish(
+            document_id, request_id, key=key,
+            report_date="2026-11-20", notes="Persisted integration notes",
+        )
         self.assertEqual(response.status_code, 201, response.text)
 
-        replay = await self.publish(document_id, request_id, key=key)
+        replay = await self.publish(
+            document_id, request_id, key=key,
+            report_date="2026-11-20", notes="Persisted integration notes",
+        )
         self.assertEqual(replay.status_code, 201, replay.text)
         self.assertEqual(replay.json(), response.json())
 
@@ -465,6 +471,16 @@ class ReportPostgresTests(IsolatedAsyncioTestCase):
         self.actor_id = self.patient_id
         metadata = await self.client.get(f"/api/v1/reports/{report_id}")
         self.assertEqual(metadata.status_code, 200, metadata.text)
+        self.db.expire_all()
+        refreshed = await self.client.get(
+            f"/api/v1/patients/{self.patient_id}/reports"
+        )
+        self.assertEqual(refreshed.status_code, 200, refreshed.text)
+        for saved in (response.json(), metadata.json(), refreshed.json()["items"][0]):
+            self.assertEqual(saved["lab_reference"], f"ML116-{request_id}")
+            self.assertEqual(saved["report_date"], "2026-11-20")
+            self.assertEqual(saved["notes"], "Persisted integration notes")
+            self.assertEqual(saved["source"], "lab_staff")
 
     async def test_immediate_lab_upload_publishes_and_notifies_once(self):
         request_id = await self.create_request()

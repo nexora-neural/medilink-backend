@@ -35,6 +35,16 @@ from app.modules.organizations.models import Organization, OrganizationMembershi
 from app.modules.profiles.models import ProfessionalProfile
 
 
+async def read_report(db, report):
+    """Serialize the persisted laboratory identity without accepting client source fields."""
+    result = ReportsRead.model_validate(report)
+    if report.report_identity_id is not None:
+        identity = await db.get(ReportIdentity, report.report_identity_id)
+        if identity is not None:
+            result.lab_reference = identity.lab_reference
+    return result
+
+
 async def _fetch_one(db, sql, **params):
     result = await db.execute(text(sql), params)
     return result.mappings().one_or_none()
@@ -205,7 +215,7 @@ async def _publish_report(db, actor, patient_id, body, key, request_id):
         request_id=request_id,
     )
 
-    result = ReportsRead.model_validate(report)
+    result = await read_report(db, report)
 
     await save_success(
         db, scope, digest, 201, result.model_dump(mode="json"),
@@ -241,7 +251,7 @@ async def get_report(db, actor, report_id: UUID):
             db, actor, report.patient_user_id,
         )
 
-    return ReportsRead.model_validate(report)
+    return await read_report(db, report)
 
 
 async def _lab_ids(db, actor):
@@ -325,7 +335,7 @@ async def _list_reports(
     )
 
     return ReportsReadPage(
-        items=[ReportsRead.model_validate(row) for row in rows],
+        items=[await read_report(db, row) for row in rows],
         total=total,
         page=page,
         page_size=page_size,
