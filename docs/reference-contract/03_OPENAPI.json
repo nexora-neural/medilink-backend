@@ -9167,6 +9167,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current schedule version as a positive integer, optionally quoted. Stale version: 409 STALE_VERSION."
           }
         ],
         "requestBody": {
@@ -9296,6 +9305,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current schedule version as a positive integer, optionally quoted. Stale version: 409 STALE_VERSION."
           }
         ],
         "requestBody": {
@@ -18630,6 +18648,12 @@
           },
           "version": {
             "type": "integer"
+          },
+          "previous_schedule_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "Retained predecessor of a replacement schedule."
           }
         },
         "required": [
@@ -20797,7 +20821,8 @@
             "items": {
               "type": "string",
               "pattern": "^([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d$"
-            }
+            },
+            "maxItems": 24
           },
           "confirmed": {
             "type": "boolean",
@@ -20826,6 +20851,16 @@
             "items": {
               "$ref": "#/components/schemas/ScheduleTimesRead"
             }
+          },
+          "prescription_source": {
+            "type": "string",
+            "enum": [
+              "patient",
+              "doctor",
+              "approved_external_system"
+            ],
+            "nullable": true,
+            "description": "Server-derived original prescription source; scheduling does not upgrade it."
           }
         },
         "required": [

@@ -282,10 +282,10 @@ Path identifiers are UUIDs. `Idempotency-Key` marked **required** is a request h
 | `GET /api/v1/dose-occurrences/{occurrence_id}/responses` | Read dose response history | Patient: own record or Verified Doctor: current category grant; clinical writes also require patient-approved consultation | No body → MedicationLogsReadPage (200) |
 | `GET /api/v1/patients/{patient_id}/adherence` | Get patient-reported adherence | Patient: own record or Verified Doctor: current category grant; clinical writes also require patient-approved consultation | No body → Adherence (200) |
 
-- `POST /api/v1/patients/{patient_id}/medication-schedules`: Patient/source labels remain visible. Daily fixed-time non-PRN only; IANA timezone; course bounds enforced; reject overlapping active schedules for same item.
+- `POST /api/v1/patients/{patient_id}/medication-schedules`: Patient/source labels remain visible. Daily fixed-time non-PRN only; IANA timezone; course bounds enforced; reject overlapping active schedules for same item. ML-155 also reserves paused windows, validates supported daily frequency/count, and requires explicit confirmation on an active issued/confirmed prescription; see [schedule policy](../api/daily-medication-schedules.md).
 - `GET /api/v1/patients/{patient_id}/medication-schedules`:  Filters: `status`.
-- `POST /api/v1/medication-schedules/{schedule_id}/status`: Reminder state only; no change to clinical dose. Resume cannot generate duplicate occurrences.
-- `POST /api/v1/medication-schedules/{schedule_id}/replacement`: Same prescription item only. Transactionally cancel old future occurrences and activate replacement; past occurrences/logs retained.
+- `POST /api/v1/medication-schedules/{schedule_id}/status`: Requires If-Match current version and a reason; terminal states cannot reopen. Reminder state only; no change to clinical dose. Resume cannot generate duplicate occurrences.
+- `POST /api/v1/medication-schedules/{schedule_id}/replacement`: Requires If-Match current version; previous_schedule_id links the retained predecessor. Same prescription item only. Transactionally cancel old future occurrences and activate replacement; past occurrences/logs retained.
 - `GET /api/v1/patients/{patient_id}/dose-occurrences`:  Filters: `from`, `to`, `status`.
 - `POST /api/v1/dose-occurrences/{occurrence_id}/snooze`: Due/unreported, unanswered, uncancelled occurrence only; future snoozed_until within 24h and schedule bounds. Approved 24h maximum; eligibility uses original scheduled_for.
 - `POST /api/v1/dose-occurrences/{occurrence_id}/responses`: taken requires reported_taken_at; skipped forbids it. Future taken time rejected, late entry allowed. Second initial response returns 409; use correction route.
@@ -864,6 +864,8 @@ or replace the existing permission and MFA checks.
 | `status` | string: active, paused, completed, cancelled | Yes |
 | `created_at` | string (date-time) | Yes |
 | `version` | integer | Yes |
+
+Optional `previous_schedule_id` (uuid) retains replacement lineage.
 
 ### ScheduleTimesRead
 
@@ -1473,6 +1475,7 @@ This response schema extends `IntegrationAdminSubmissionRead` with the idempoten
 |---|---|---|
 | `schedule` | MedicationSchedulesRead | Yes |
 | `times` | array<ScheduleTimesRead> | Yes |
+| `prescription_source` | string: patient, doctor, approved_external_system; server-derived | No |
 
 ### ScheduleAction
 

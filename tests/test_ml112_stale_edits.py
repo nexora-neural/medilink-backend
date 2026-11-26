@@ -289,6 +289,8 @@ class ScheduleStaleEditTests(IsolatedAsyncioTestCase):
             prescription = Prescription(
                 patient_user_id=self.patient.id,
                 source="patient",
+                status="active",
+                issued_at=now - timedelta(days=7),
                 created_by=self.patient.id,
             )
             session.add(prescription)
