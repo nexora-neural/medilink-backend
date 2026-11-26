@@ -19049,6 +19049,11 @@
             "format": "uuid",
             "nullable": true
           },
+          "lab_reference": {
+            "type": "string",
+            "nullable": true,
+            "description": "Persisted laboratory reference from the linked report identity; null for patient self-uploaded reports."
+          },
           "report_identity_id": {
             "type": "string",
             "format": "uuid",

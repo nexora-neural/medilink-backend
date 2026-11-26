@@ -971,6 +971,7 @@ Optional `previous_schedule_id` (uuid) retains replacement lineage.
 | `id` | string (uuid) | Yes |
 | `patient_user_id` | string (uuid) | Yes |
 | `laboratory_id` | string (uuid); nullable | No |
+| `lab_reference` | string; nullable; server-derived from the linked report identity | No |
 | `report_identity_id` | string (uuid); nullable | No |
 | `upload_request_id` | string (uuid); nullable | No |
 | `document_id` | string (uuid) | Yes |
@@ -2290,3 +2291,18 @@ Lock the original, check ownership, source and active status, then atomically in
 ### ML-114 eligible laboratory selection
 
 The selector and client creation use the same server eligibility predicate. A laboratory must be active and have at least one active user with an approved lab_staff membership, an approved lab_staff professional profile, and an approved lab_staff verification application for that same laboratory and user. Results contain only organization id and name, are ordered by name and id, are paginated (page >= 1; page_size 1-100, default 20), and are returned with Cache-Control: no-store. Unknown query parameters are rejected. Client creation rechecks current eligibility so revocation after loading the selector is denied. No database migration is required.
+
+## ML-133 report response reference
+
+- Report responses include nullable `lab_reference`, read from the persisted
+  `report_identities.lab_reference` through the authorized report's identity.
+- The field is returned for publication, detail, patient/laboratory listing,
+  correction, withdrawal and version-history responses. Patient self-uploaded
+  reports have no laboratory identity and return null.
+- The existing request field remains restricted to verified Lab Staff using a
+  matching laboratory upload request; clients cannot set the report source.
+- Publication replay returns the stored response for the original idempotency
+  key. Stored responses created before this field was added can deserialize
+  with a null reference; current detail/list responses read the persisted identity.
+- No database migration, ownership rule, request-consumption rule or notification
+  deduplication change is introduced by this response extension.
