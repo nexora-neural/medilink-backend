@@ -9,6 +9,7 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from app.modules.verification import service
+from app.modules.verification.models import VerificationApplication
 from app.modules.verification.schemas import (
     ProfessionalProfileInput,
     VerificationApplicationInput,
@@ -38,9 +39,11 @@ class ContractTests(TestCase):
         data = VerificationApplicationInput(
             role="doctor",
             registration_number="SLMC-123",
+            workplace="Demo Clinic",
             evidence_document_ids=[uuid4()],
         )
         self.assertEqual(data.role.value, "doctor")
+        self.assertEqual(data.workplace, "Demo Clinic")
         self.assertEqual(len(data.evidence_document_ids), 1)
 
     def test_duplicate_evidence_rejected(self):
@@ -108,6 +111,57 @@ class ServiceTests(IsolatedAsyncioTestCase):
                     self.db, self.user, self.request, "pharmacist"
                 )
         self.assertEqual(ctx.exception.status_code, 409)
+
+    async def test_application_uses_saved_workplace_when_submission_omits_it(self):
+        profile = SimpleNamespace(
+            role="doctor",
+            verification_status="not_submitted",
+            registration_number="REG-123",
+            workplace="Demo Clinic",
+        )
+        document_id = uuid4()
+        payload = VerificationApplicationInput(
+            role="doctor", registration_number="REG-123", evidence_document_ids=[document_id]
+        )
+        self.db.get = AsyncMock(return_value=None)
+        self.db.add = MagicMock()
+        self.db.refresh = AsyncMock()
+        self.db.flush = AsyncMock()
+        self.db.commit = AsyncMock()
+        with (
+            patch.object(
+                service.repository,
+                "get_professional_profile",
+                AsyncMock(return_value=profile),
+            ),
+            patch.object(
+                service.repository,
+                "get_assigned_professional_roles",
+                AsyncMock(return_value=set()),
+            ),
+            patch.object(
+                service.repository,
+                "get_user_applications",
+                AsyncMock(return_value=[]),
+            ),
+            patch.object(
+                service.repository,
+                "get_owned_evidence",
+                AsyncMock(return_value=object()),
+            ),
+            patch.object(service, "_audit", AsyncMock()),
+            patch.object(
+                VerificationApplicationRead,
+                "model_validate",
+                return_value=MagicMock(model_copy=MagicMock(return_value=MagicMock())),
+            ),
+        ):
+            await service.submit_application(self.db, self.user, self.request, payload)
+        application = next(
+            item for item in self.db.add.call_args_list[0].args
+            if isinstance(item, VerificationApplication)
+        )
+        self.assertEqual(application.workplace, "Demo Clinic")
 
     async def test_pending_applicant_without_professional_assignment_is_allowed(self):
         with patch.object(

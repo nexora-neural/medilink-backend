@@ -62,6 +62,7 @@ class ProfessionalProfile(Base):
     role = Column(professional_role_type, nullable=False)
     doctor_reference = Column(Text, unique=True)
     registration_number = Column(Text)
+    workplace = Column(Text)
     qualifications = Column(Text)
     specialty = Column(Text)
     verification_status = Column(
