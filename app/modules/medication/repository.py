@@ -7,7 +7,12 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.medication.enum import DoseStatus, ScheduleStatus
-from app.modules.medication.models import DoseOccurrence, MedicationSchedule, ScheduleTime
+from app.modules.medication.models import (
+    DoseOccurrence,
+    MedicationLog,
+    MedicationSchedule,
+    ScheduleTime,
+)
 from app.modules.prescriptions.core_models import Prescription, PrescriptionItem
 
 
@@ -15,6 +20,15 @@ async def lock_schedule(session: AsyncSession, schedule_id: UUID):
     return await session.scalar(
         select(MedicationSchedule)
         .where(MedicationSchedule.id == schedule_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+
+
+async def lock_occurrence(session: AsyncSession, occurrence_id: UUID):
+    return await session.scalar(
+        select(DoseOccurrence)
+        .where(DoseOccurrence.id == occurrence_id)
         .with_for_update()
         .execution_options(populate_existing=True)
     )
@@ -101,6 +115,34 @@ async def list_schedules(session, patient_id, query):
     return rows, total
 
 
+async def list_occurrences(session, patient_id, query):
+    conditions = [MedicationSchedule.patient_user_id == patient_id]
+    if query.from_ is not None:
+        conditions.append(DoseOccurrence.scheduled_for >= query.from_)
+    if query.to is not None:
+        conditions.append(DoseOccurrence.scheduled_for < query.to)
+    if query.status is not None:
+        conditions.append(DoseOccurrence.status == query.status)
+
+    total = await session.scalar(
+        select(func.count())
+        .select_from(DoseOccurrence)
+        .join(MedicationSchedule, MedicationSchedule.id == DoseOccurrence.schedule_id)
+        .where(*conditions)
+    )
+    rows = (
+        await session.scalars(
+            select(DoseOccurrence)
+            .join(MedicationSchedule, MedicationSchedule.id == DoseOccurrence.schedule_id)
+            .where(*conditions)
+            .order_by(DoseOccurrence.scheduled_for, DoseOccurrence.id)
+            .offset((query.page - 1) * query.page_size)
+            .limit(query.page_size)
+        )
+    ).all()
+    return rows, total
+
+
 async def overlapping_schedule(session, item_id, start, end, *, exclude_id=None):
     clauses = [
         MedicationSchedule.prescription_item_id == item_id,
@@ -115,14 +157,52 @@ async def overlapping_schedule(session, item_id, start, end, *, exclude_id=None)
 
 
 async def cancel_future_occurrences(session, schedule_id, now):
+    has_log = select(MedicationLog.id).where(
+        MedicationLog.dose_occurrence_id == DoseOccurrence.id
+    ).correlate(DoseOccurrence).exists()
     result = await session.execute(
         update(DoseOccurrence)
         .where(
             DoseOccurrence.schedule_id == schedule_id,
             DoseOccurrence.scheduled_for > now,
-            DoseOccurrence.status.in_([DoseStatus.UPCOMING, DoseStatus.DUE]),
+            DoseOccurrence.status.in_(
+                [DoseStatus.UPCOMING, DoseStatus.DUE, DoseStatus.UNREPORTED]
+            ),
+            ~has_log,
         )
         .values(status=DoseStatus.CANCELLED, snoozed_until=None)
+        .execution_options(synchronize_session="fetch")
+    )
+    await session.execute(
+        update(DoseOccurrence)
+        .where(
+            DoseOccurrence.schedule_id == schedule_id,
+            DoseOccurrence.scheduled_for <= now,
+            DoseOccurrence.status.in_(
+                [DoseStatus.UPCOMING, DoseStatus.DUE, DoseStatus.UNREPORTED]
+            ),
+            DoseOccurrence.snoozed_until.is_not(None),
+            ~has_log,
+        )
+        .values(snoozed_until=None)
+        .execution_options(synchronize_session="fetch")
+    )
+    return result.rowcount or 0
+
+
+async def mark_past_unreported(session, schedule_id, now):
+    has_log = select(MedicationLog.id).where(
+        MedicationLog.dose_occurrence_id == DoseOccurrence.id
+    ).correlate(DoseOccurrence).exists()
+    result = await session.execute(
+        update(DoseOccurrence)
+        .where(
+            DoseOccurrence.schedule_id == schedule_id,
+            DoseOccurrence.scheduled_for < now,
+            DoseOccurrence.status.in_([DoseStatus.UPCOMING, DoseStatus.DUE]),
+            ~has_log,
+        )
+        .values(status=DoseStatus.UNREPORTED)
         .execution_options(synchronize_session="fetch")
     )
     return result.rowcount or 0
@@ -155,6 +235,7 @@ async def create_schedule(
         confirmed_at=confirmed_at,
         status=ScheduleStatus.ACTIVE,
         version=1,
+        occurrences_generated_through=confirmed_at,
         previous_schedule_id=previous_schedule_id,
     )
     session.add(schedule)

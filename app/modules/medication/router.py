@@ -16,12 +16,16 @@ from app.modules.identity.models import User
 from app.modules.identity.request_limits import require_authenticated_rate_limit
 from app.modules.medication import service
 from app.modules.medication.schemas import (
+    DoseOccurrenceListQuery,
+    DoseOccurrencesRead,
+    DoseOccurrencesReadPage,
     ScheduleAction,
     ScheduleDetail,
     ScheduleDetailPage,
     ScheduleErrorResponse,
     ScheduleInput,
     ScheduleListQuery,
+    SnoozeInput,
 )
 
 
@@ -51,7 +55,10 @@ class ScheduleRoute(APIRoute):
                 status_code=status,
                 headers={"Cache-Control": "no-store"},
                 content=ScheduleErrorResponse(
-                    code=code, message=message, request_id=request.state.request_id
+                    code=code,
+                    message=message,
+                    field_errors={},
+                    request_id=request.state.request_id,
                 ).model_dump(),
             )
 
@@ -176,4 +183,49 @@ async def replace_medication_schedule(
         expected_version=expected_version(if_match),
         payload=payload,
         request_id=request.state.request_id,
+    )
+
+
+@router.get(
+    "/patients/{patient_id}/dose-occurrences",
+    response_model=DoseOccurrencesReadPage,
+    operation_id="medilink_072",
+)
+async def list_dose_occurrences(
+    patient_id: UUID,
+    query: Annotated[DoseOccurrenceListQuery, Query()],
+    request: Request,
+    session: SessionDep,
+    current_user: UserDep,
+):
+    """List retained dose occurrences using patient or current doctor consent."""
+    return await service.list_occurrences(
+        session,
+        current_user,
+        patient_id,
+        query,
+        request.state.request_id,
+    )
+
+
+@router.post(
+    "/dose-occurrences/{occurrence_id}/snooze",
+    response_model=DoseOccurrencesRead,
+    status_code=201,
+    operation_id="medilink_073",
+)
+async def snooze_dose_occurrence(
+    occurrence_id: UUID,
+    payload: SnoozeInput,
+    request: Request,
+    session: SessionDep,
+    current_user: UserDep,
+):
+    """Postpone reminder delivery on the same unanswered dose occurrence."""
+    return await service.snooze_occurrence(
+        session,
+        current_user,
+        occurrence_id,
+        payload,
+        request.state.request_id,
     )

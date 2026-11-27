@@ -110,6 +110,14 @@ class MedicationSchedule(Base):
         nullable=False,
         server_default=text("1"),
     )
+    occurrences_generated_through: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+    occurrences_worker_processed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     previous_schedule_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
