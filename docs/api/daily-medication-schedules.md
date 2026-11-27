@@ -72,19 +72,17 @@ resume collisions. Concurrent confirmation has one success, one conflict; concur
 changes using one version have one success, one stale conflict. Database uniqueness
 on previous_schedule_id prevents two successors of one predecessor.
 
-Replacement cancels only the old future upcoming/due occurrences, cancels/increments
-the old schedule and creates its linked successor. Existing times, past occurrences
-and all medication logs are retained. Status completion/cancellation similarly
-cancels only future unanswered occurrences and clears their pending snooze.
-Pausing preserves occurrences and their timestamps; resuming never creates rows or
-backfills missed doses, so it cannot duplicate occurrences.
+Replacement marks elapsed unanswered occurrences unreported, cancels only future
+unanswered occurrences, clears pending snoozes on unanswered occurrences, and
+cancels/increments the old schedule before creating its linked successor. Existing
+times, past occurrences and medication logs are retained. Completion/cancellation
+use the same rule. Pausing preserves occurrences and their timestamps. Resuming
+resets the generation cursor to the resume instant: it does not create occurrences
+for the paused interval, while pre-existing occurrence rows remain intact.
 
-**ML-170 boundary:** this API does not generate dose occurrences, deliver reminders,
-mark due/unreported or implement snooze. The occurrence/reminder worker must gate on
-current active schedule status and course bounds, and use the existing unique
-(schedule_id, scheduled_for) key. In particular, it must not send reminders for
-paused or terminal schedules. End-to-end delivery requires that dependent workflow;
-these tests exercise schedule persistence and existing occurrence retention only.
+ML-170 occurrence generation, status evaluation, reminder delivery and snoozing are
+implemented in [dose-occurrences.md](dose-occurrences.md). Generation and reminder
+delivery run only for active schedules and within the confirmed course bounds.
 
 ## Retained history, audit and API additions
 

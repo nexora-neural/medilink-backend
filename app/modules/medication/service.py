@@ -14,9 +14,22 @@ from app.modules.identity.authorization import (
 )
 from app.modules.identity.models import Role, User, UserRole
 from app.modules.medication import repository
-from app.modules.medication.enum import ScheduleStatus
-from app.modules.medication.models import MedicationSchedule, ScheduleStatusChange
-from app.modules.medication.schemas import ScheduleDetail, ScheduleDetailPage, ScheduleInput
+from app.modules.medication.enum import DoseStatus, ScheduleStatus
+from app.modules.medication.models import (
+    DoseOccurrence,
+    MedicationLog,
+    MedicationSchedule,
+    ScheduleStatusChange,
+)
+from app.modules.medication.schemas import (
+    DoseOccurrenceListQuery,
+    DoseOccurrencesRead,
+    DoseOccurrencesReadPage,
+    ScheduleDetail,
+    ScheduleDetailPage,
+    ScheduleInput,
+    SnoozeInput,
+)
 from app.modules.organizations.models import Organization, OrganizationMembership
 from app.modules.profiles.models import PatientProfile, ProfessionalProfile
 
@@ -225,6 +238,94 @@ async def list_schedules(session, actor, patient_id, query, request_id):
         raise
 
 
+async def list_occurrences(session, actor, patient_id, query: DoseOccurrenceListQuery, request_id):
+    try:
+        await read_access(session, actor, patient_id)
+        rows, total = await repository.list_occurrences(session, patient_id, query)
+        result = DoseOccurrencesReadPage(
+            items=rows,
+            page=query.page,
+            page_size=query.page_size,
+            total=total,
+        )
+        await append_event(
+            session,
+            action="dose_occurrence.listed",
+            target_type="patient_record",
+            target_id=patient_id,
+            actor_user_id=actor.id,
+            outcome="success",
+            request_id=request_id,
+            metadata={"result_count": len(rows)},
+        )
+        await session.commit()
+        return result
+    except Exception:
+        await session.rollback()
+        raise
+
+
+async def snooze_occurrence(session, actor, occurrence_id, payload: SnoozeInput, request_id):
+    try:
+        occurrence_ref = await session.get(DoseOccurrence, occurrence_id)
+        if occurrence_ref is None:
+            missing()
+
+        # Keep the same parent prescription -> item -> schedule -> occurrence
+        # lock order used by schedule replacement and stopping.
+        schedule, _item, _prescription = await owned_context(
+            session, occurrence_ref.schedule_id, actor.id
+        )
+        occurrence = await repository.lock_occurrence(session, occurrence_id)
+        if occurrence is None or occurrence.schedule_id != schedule.id:
+            missing()
+
+        now = await session.scalar(select(func.clock_timestamp()))
+        has_log = await session.scalar(
+            select(MedicationLog.id)
+            .where(MedicationLog.dose_occurrence_id == occurrence.id)
+            .limit(1)
+        )
+        if (
+            schedule.status != ScheduleStatus.ACTIVE
+            or (schedule.ends_at is not None and schedule.ends_at <= now)
+            or occurrence.status not in {DoseStatus.DUE, DoseStatus.UNREPORTED}
+            or occurrence.scheduled_for > now
+            or occurrence.scheduled_for < schedule.starts_at
+            or (schedule.ends_at is not None and occurrence.scheduled_for >= schedule.ends_at)
+            or has_log is not None
+        ):
+            error(409, "INVALID_STATE", "This dose occurrence cannot be snoozed.")
+
+        snoozed_until = payload.snoozed_until
+        if snoozed_until <= now:
+            error(422, "VALIDATION_ERROR", "snoozed_until must be in the future.")
+        if snoozed_until > now + timedelta(hours=24):
+            error(422, "VALIDATION_ERROR", "snoozed_until cannot be more than 24 hours away.")
+        if snoozed_until < schedule.starts_at or (
+            schedule.ends_at is not None and snoozed_until >= schedule.ends_at
+        ):
+            error(422, "VALIDATION_ERROR", "snoozed_until must be within the schedule window.")
+
+        occurrence.snoozed_until = snoozed_until
+        await append_event(
+            session,
+            action="dose_occurrence.snoozed",
+            target_type="dose_occurrence",
+            target_id=occurrence.id,
+            actor_user_id=actor.id,
+            outcome="success",
+            request_id=request_id,
+            metadata={"status": occurrence.status},
+        )
+        result = DoseOccurrencesRead.model_validate(occurrence)
+        await session.commit()
+        return result
+    except Exception:
+        await session.rollback()
+        raise
+
+
 async def create_schedule(session, actor, patient_id, payload, request_id):
     try:
         await patient_actor(session, actor.id, patient_id)
@@ -310,6 +411,7 @@ async def replace_schedule(
             session, item.id, payload.starts_at, payload.ends_at, exclude_id=old.id
         ):
             error(409, "INVALID_STATE", "Another schedule covers this item and period.")
+        await repository.mark_past_unreported(session, old.id, now)
         await repository.cancel_future_occurrences(session, old.id, now)
         await repository.cancel_schedule(session, old)
         new = await repository.create_schedule(
@@ -376,8 +478,10 @@ async def change_status(session, actor, schedule_id, expected_version, payload, 
                 session, item.id, row.starts_at, row.ends_at, exclude_id=row.id
             ):
                 error(409, "INVALID_STATE", "Another schedule covers this item and period.")
+            row.occurrences_generated_through = now
         previous = row.status
         if payload.status in {ScheduleStatus.CANCELLED, ScheduleStatus.COMPLETED}:
+            await repository.mark_past_unreported(session, row.id, now)
             await repository.cancel_future_occurrences(session, row.id, now)
         row.status = payload.status
         row.version += 1

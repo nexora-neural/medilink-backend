@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.modules.medication.enum import ScheduleStatus
+from app.modules.medication.enum import DoseStatus, ScheduleStatus
 from app.modules.prescriptions.core_models import PrescriptionSource
 
 
@@ -88,6 +88,46 @@ class ScheduleListQuery(BaseModel):
     status: ScheduleStatus | None = None
 
 
+class DoseOccurrenceListQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    page: int = Field(default=1, ge=1, le=2147483647)
+    page_size: int = Field(default=20, ge=1, le=100)
+    from_: AwareDatetime | None = Field(default=None, alias="from")
+    to: AwareDatetime | None = None
+    status: DoseStatus | None = None
+
+    @model_validator(mode="after")
+    def validate_period(self):
+        if self.from_ is not None and self.to is not None and self.from_ >= self.to:
+            raise ValueError("from must be earlier than to.")
+        return self
+
+
+class SnoozeInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    snoozed_until: AwareDatetime
+
+
+class DoseOccurrencesRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    schedule_id: UUID
+    scheduled_for: AwareDatetime
+    status: DoseStatus
+    snoozed_until: AwareDatetime | None = None
+    created_at: AwareDatetime
+
+
+class DoseOccurrencesReadPage(BaseModel):
+    items: list[DoseOccurrencesRead]
+    page: int
+    page_size: int
+    total: int
+
+
 class MedicationScheduleRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -128,7 +168,9 @@ class ScheduleDetailPage(BaseModel):
 
 
 class ScheduleErrorResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     code: str
     message: str
-    field_errors: dict[str, list[str]] = Field(default_factory=dict)
+    field_errors: dict[str, list[str]]
     request_id: str

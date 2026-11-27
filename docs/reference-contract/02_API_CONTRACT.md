@@ -286,7 +286,7 @@ Path identifiers are UUIDs. `Idempotency-Key` marked **required** is a request h
 - `GET /api/v1/patients/{patient_id}/medication-schedules`:  Filters: `status`.
 - `POST /api/v1/medication-schedules/{schedule_id}/status`: Requires If-Match current version and a reason; terminal states cannot reopen. Reminder state only; no change to clinical dose. Resume cannot generate duplicate occurrences.
 - `POST /api/v1/medication-schedules/{schedule_id}/replacement`: Requires If-Match current version; previous_schedule_id links the retained predecessor. Same prescription item only. Transactionally cancel old future occurrences and activate replacement; past occurrences/logs retained.
-- `GET /api/v1/patients/{patient_id}/dose-occurrences`:  Filters: `from`, `to`, `status`.
+- `GET /api/v1/patients/{patient_id}/dose-occurrences`: Filters: `from` (inclusive), `to` (exclusive), `status`; supports `page` and `page_size` pagination.
 - `POST /api/v1/dose-occurrences/{occurrence_id}/snooze`: Due/unreported, unanswered, uncancelled occurrence only; future snoozed_until within 24h and schedule bounds. Approved 24h maximum; eligibility uses original scheduled_for.
 - `POST /api/v1/dose-occurrences/{occurrence_id}/responses`: taken requires reported_taken_at; skipped forbids it. Future taken time rejected, late entry allowed. Second initial response returns 409; use correction route.
 - `POST /api/v1/medication-logs/{log_id}/corrections`: Append correction_of_id; one current linear chain per occurrence enforced transactionally. Old/stale head returns 409.

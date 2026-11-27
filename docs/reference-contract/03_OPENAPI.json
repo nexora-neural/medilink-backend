@@ -9358,7 +9358,7 @@
           "Medication"
         ],
         "summary": "List dose events",
-        "description": "Allowed actor: Patient: own record or Verified Doctor: current category grant; clinical writes also require patient-approved consultation. ",
+        "description": "Allowed actor: Patient: own record or Verified Doctor: current medication_logs grant; reads do not require consultation. from is inclusive and to is exclusive; status and bounded page/page_size filters are supported.",
         "security": [
           {
             "FirebaseBearer": []
@@ -9454,9 +9454,19 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "A required service is temporarily unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
-        "x-allowed-actors": "Patient: own record or Verified Doctor: current category grant; clinical writes also require patient-approved consultation",
+        "x-allowed-actors": "Patient: own record or Verified Doctor: current medication_logs grant",
         "parameters": [
           {
             "name": "patient_id",
@@ -9473,6 +9483,7 @@
             "schema": {
               "type": "integer",
               "minimum": 1,
+              "maximum": 2147483647,
               "default": 1
             }
           },
@@ -9510,7 +9521,14 @@
             "required": false,
             "schema": {
               "type": "string",
-              "maxLength": 200
+              "enum": [
+                "upcoming",
+                "due",
+                "taken",
+                "skipped",
+                "unreported",
+                "cancelled"
+              ]
             }
           }
         ]
@@ -9523,7 +9541,7 @@
           "Medication"
         ],
         "summary": "Snooze same occurrence",
-        "description": "Allowed actor: Patient: own record. Due/unreported, unanswered, uncancelled occurrence only; future snoozed_until within 24h and schedule bounds. Approved 24h maximum; eligibility uses original scheduled_for.",
+        "description": "Allowed actor: Patient: own record. Active schedule; due/unreported, unanswered occurrence with scheduled_for at or before now. snoozed_until must be future, within 24h, and inside the schedule window. Snooze changes reminder delivery only; eligibility uses original scheduled_for.",
         "security": [
           {
             "FirebaseBearer": []
@@ -9612,6 +9630,16 @@
           },
           "500": {
             "description": "Unexpected failure with safe request_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is temporarily unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -9760,16 +9788,6 @@
               "type": "string",
               "format": "uuid"
             }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            }
           }
         ],
         "requestBody": {
@@ -9777,7 +9795,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/DoseResponseInput"
+                "$ref": "#/components/schemas/SnoozeInput"
               }
             }
           }
