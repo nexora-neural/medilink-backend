@@ -1,11 +1,12 @@
 """Database access methods for prescriptions and OCR workflow."""
 
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.medication.models import MedicationSchedule
+from app.modules.medication.models import DoseOccurrence, MedicationLog, MedicationSchedule
 from app.modules.prescriptions.core_models import Medicine, Prescription, PrescriptionItem
 from app.modules.prescriptions.schemas import MedicineInput, PrescriptionInput
 
@@ -254,3 +255,72 @@ async def delete_draft_rows(
 
     await session.execute(delete(Prescription).where(Prescription.id == prescription_id))
     await session.flush()
+
+
+async def cancel_superseded_medication(
+    session: AsyncSession,
+    *,
+    prescription_id: UUID,
+    now: datetime,
+) -> tuple[int, int]:
+    """Stop old schedules and cancel only future, unanswered occurrences.
+
+    Caller must hold the parent prescription lock.
+    Transaction commit/rollback remains with the service.
+    """
+
+    schedules = list(
+        (
+            await session.scalars(
+                select(MedicationSchedule)
+                .join(
+                    PrescriptionItem,
+                    MedicationSchedule.prescription_item_id == PrescriptionItem.id,
+                )
+                .where(PrescriptionItem.prescription_id == prescription_id)
+                .order_by(MedicationSchedule.id)
+                .with_for_update(of=MedicationSchedule)
+                .execution_options(populate_existing=True)
+            )
+        ).all()
+    )
+
+    if not schedules:
+        return 0, 0
+
+    cancelled_schedules = 0
+
+    for schedule in schedules:
+        if schedule.status in {"active", "paused"}:
+            schedule.status = "cancelled"
+            schedule.version += 1
+            cancelled_schedules += 1
+
+    schedule_ids = [schedule.id for schedule in schedules]
+
+    has_log = (
+        select(MedicationLog.id)
+        .where(MedicationLog.dose_occurrence_id == DoseOccurrence.id)
+        .exists()
+    )
+
+    result = await session.execute(
+        update(DoseOccurrence)
+        .where(
+            DoseOccurrence.schedule_id.in_(schedule_ids),
+            DoseOccurrence.scheduled_for > now,
+            DoseOccurrence.status.in_(["upcoming", "due", "unreported"]),
+            ~has_log,
+        )
+        .values(
+            status="cancelled",
+            snoozed_until=None,
+        )
+        .returning(DoseOccurrence.id)
+        .execution_options(synchronize_session=False)
+    )
+
+    cancelled_occurrences = len(result.scalars().all())
+    await session.flush()
+
+    return cancelled_schedules, cancelled_occurrences

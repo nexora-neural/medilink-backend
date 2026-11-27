@@ -35,6 +35,7 @@ from app.modules.prescriptions.schemas import (
     PrescriptionDetail,
     PrescriptionDetailPage,
     PrescriptionInput,
+    PrescriptionIssueContent,
     PrescriptionItemInput,
 )
 from app.modules.profiles.models import ProfessionalProfile
@@ -859,6 +860,257 @@ async def delete_draft(
         )
 
         await session.commit()
+
+    except Exception:
+        await session.rollback()
+        raise
+
+
+async def issue_prescription(
+    *,
+    session: AsyncSession,
+    user: User,
+    request: Request,
+    prescription_id: UUID,
+) -> PrescriptionDetail:
+    """Explicitly issue a complete draft owned by the verified doctor."""
+
+    request_id = getattr(request.state, "request_id", "")
+
+    def issue_error(status_code, code, message, field_errors=None):
+        return AuthenticationError(
+            status_code=status_code,
+            detail={
+                "code": code,
+                "message": message,
+                "field_errors": field_errors or {},
+                "request_id": request_id,
+            },
+        )
+
+    try:
+        # Prevent simultaneous edits or duplicate issue transitions.
+        prescription = await repository.lock_prescription(
+            session,
+            prescription_id,
+        )
+
+        if prescription is None:
+            raise issue_error(
+                404,
+                "RESOURCE_NOT_FOUND",
+                "Prescription not found.",
+            )
+
+        source = getattr(prescription.source, "value", prescription.source)
+
+        if source != "doctor" or prescription.prescriber_user_id != user.id:
+            raise forbidden(request)
+
+        authorized_source = await require_prescription_access(
+            session,
+            user=user,
+            request=request,
+            patient_id=prescription.patient_user_id,
+            consultation_id=prescription.consultation_id,
+            clinical_write=True,
+        )
+
+        if authorized_source != "doctor":
+            raise forbidden(request)
+
+        # A retry must not issue twice or create duplicate audit events.
+        if prescription.status == PrescriptionStatus.ACTIVE:
+            if prescription.issued_at is None:
+                raise issue_error(
+                    409,
+                    "INVALID_STATE",
+                    "Prescription state is inconsistent.",
+                )
+
+            result = await build_prescription_detail(session, prescription)
+            await session.commit()
+            return result
+
+        if prescription.status != PrescriptionStatus.DRAFT or prescription.issued_at is not None:
+            raise issue_error(
+                409,
+                "INVALID_STATE",
+                "Only never-issued drafts can be issued.",
+            )
+
+        detail = await build_prescription_detail(session, prescription)
+
+        item_fields = {
+            "medicine_id",
+            "medicine_name_snapshot",
+            "dose_text",
+            "route",
+            "frequency",
+            "duration_days",
+            "instructions",
+            "quantity",
+            "quantity_unit",
+            "is_prn",
+        }
+
+        try:
+            content = PrescriptionIssueContent.model_validate(
+                {
+                    "consultation_id": prescription.consultation_id,
+                    "starts_on": prescription.starts_on,
+                    "ends_on": prescription.ends_on,
+                    "original_document_id": prescription.original_document_id,
+                    "items": [item.model_dump(include=item_fields) for item in detail.items],
+                }
+            )
+        except ValidationError as exc:
+            field_errors = {}
+            for error in exc.errors(
+                include_input=False,
+                include_context=False,
+                include_url=False,
+            ):
+                field = ".".join(str(part) for part in error["loc"])
+                field_errors.setdefault(field, []).append(error["msg"])
+
+            raise issue_error(
+                422,
+                "VALIDATION_ERROR",
+                "Complete the prescription details before issuing.",
+                field_errors,
+            ) from None
+
+        await validate_draft_references(
+            session,
+            request=request,
+            patient_id=prescription.patient_user_id,
+            payload=content,
+        )
+
+        predecessor = None
+
+        if prescription.previous_prescription_id is not None:
+            if prescription.previous_prescription_id == prescription.id:
+                raise issue_error(
+                    409,
+                    "INVALID_STATE",
+                    "A prescription cannot replace itself.",
+                )
+
+            predecessor = await repository.lock_prescription(
+                session,
+                prescription.previous_prescription_id,
+            )
+
+            if predecessor is None or predecessor.patient_user_id != prescription.patient_user_id:
+                raise issue_error(
+                    409,
+                    "INVALID_STATE",
+                    "The linked prescription is unavailable.",
+                )
+
+            predecessor_source = getattr(predecessor.source, "value", predecessor.source)
+
+            if predecessor_source == "doctor":
+                if predecessor.prescriber_user_id != user.id:
+                    raise forbidden(request)
+            elif predecessor_source != "patient":
+                raise forbidden(request)
+
+            if (
+                predecessor.status
+                not in {
+                    PrescriptionStatus.ACTIVE,
+                    PrescriptionStatus.COMPLETED,
+                }
+                or predecessor.issued_at is None
+            ):
+                raise issue_error(
+                    409,
+                    "INVALID_STATE",
+                    "The linked prescription cannot be replaced.",
+                )
+        # Locks may have taken time to acquire.
+        # Recheck current permission before changing prescription state.
+        authorized_source = await require_prescription_access(
+            session,
+            user=user,
+            request=request,
+            patient_id=prescription.patient_user_id,
+            consultation_id=prescription.consultation_id,
+            clinical_write=True,
+        )
+
+        if authorized_source != "doctor":
+            raise forbidden(request)
+
+        previous_version = prescription.version
+        now = datetime.now(UTC)
+
+        previous_version = prescription.version
+        now = datetime.now(UTC)
+
+        if predecessor is not None:
+            predecessor_status = getattr(predecessor.status, "value", predecessor.status)
+            predecessor_version = predecessor.version
+
+            predecessor.status = PrescriptionStatus.SUPERSEDED
+            predecessor.updated_at = now
+            predecessor.version += 1
+
+            await repository.cancel_superseded_medication(
+                session,
+                prescription_id=predecessor.id,
+                now=now,
+            )
+
+            await append_event(
+                session,
+                actor_user_id=user.id,
+                action="prescription.superseded",
+                target_type="prescriptions",
+                target_id=predecessor.id,
+                outcome="success",
+                request_id=request_id,
+                metadata={
+                    "previous_status": predecessor_status,
+                    "status": "superseded",
+                    "previous_version": predecessor_version,
+                    "new_version": predecessor.version,
+                },
+            )
+
+        prescription.status = PrescriptionStatus.ACTIVE
+        prescription.issued_at = now
+        prescription.updated_at = now
+        prescription.version += 1
+
+        await session.flush()
+
+        await append_event(
+            session,
+            actor_user_id=user.id,
+            action="prescription.issued",
+            target_type="prescriptions",
+            target_id=prescription.id,
+            outcome="success",
+            request_id=request_id,
+            metadata={
+                "source": "doctor",
+                "previous_status": "draft",
+                "status": "active",
+                "previous_version": previous_version,
+                "new_version": prescription.version,
+                "item_count": len(content.items),
+                **({"supersedes_id": str(predecessor.id)} if predecessor is not None else {}),
+            },
+        )
+
+        result = await build_prescription_detail(session, prescription)
+
+        await session.commit()
+        return result
 
     except Exception:
         await session.rollback()
