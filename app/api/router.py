@@ -9,6 +9,7 @@ from app.modules.dispensing.router import router as dispensing_router
 from app.modules.documents.router import router as documents_router
 from app.modules.fhir.router import router as fhir_router
 from app.modules.identity.router import router as identity_router
+from app.modules.integrations.report_router import router as integration_reports_router
 from app.modules.integrations.router import router as integrations_router
 from app.modules.laboratory.router import router as laboratory_router
 from app.modules.measurements.router import router as measurements_router
@@ -23,7 +24,6 @@ from app.modules.profiles.doctor_qr.router import router as doctor_qr_router
 from app.modules.profiles.router import router as profiles_router
 from app.modules.vaccinations.router import router as vaccinations_router
 from app.modules.verification.router import router as verification_router
-from app.modules.integrations.report_router import router as integration_reports_router
 
 api_router = APIRouter()
 
