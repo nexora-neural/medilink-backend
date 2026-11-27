@@ -24,6 +24,7 @@ class ReportsRead(BaseModel):
     id: UUID
     patient_user_id: UUID
     laboratory_id: UUID | None
+    lab_reference: str | None = None
     report_identity_id: UUID | None
     upload_request_id: UUID | None
     document_id: UUID

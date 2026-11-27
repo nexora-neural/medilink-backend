@@ -22,7 +22,7 @@ from app.modules.identity.authorization import deny, require_verified_membership
 from app.modules.laboratory.models import Report, ReportIdentity, ReportStatus
 from app.modules.laboratory.report_notifications import notify_report_accepted
 from app.modules.laboratory.report_schemas import ReportsRead, ReportsReadPage
-from app.modules.laboratory.report_service import _fetch_one, get_report
+from app.modules.laboratory.report_service import _fetch_one, get_report, read_report
 from app.modules.laboratory.service import LabUploadRequestError, require_patient
 
 
@@ -209,7 +209,7 @@ async def create_version(db, actor, report_id, body, key, request_id):
             metadata={"supersedes_id": str(previous.id)},
         )
 
-        result = ReportsRead.model_validate(replacement)
+        result = await read_report(db, replacement)
         await save_success(db, scope, digest, 201, result.model_dump(mode="json"))
         await db.commit()
         return result
@@ -271,7 +271,7 @@ async def withdraw_report(db, actor, report_id, reason, request_id):
             request_id=request_id,
         )
 
-        result = ReportsRead.model_validate(report)
+        result = await read_report(db, report)
         await db.commit()
         return result
     except Exception:
@@ -296,7 +296,7 @@ async def get_history(db, actor, report_id: UUID, page, page_size):
     )
 
     return ReportsReadPage(
-        items=[ReportsRead.model_validate(row) for row in rows],
+        items=[await read_report(db, row) for row in rows],
         page=page,
         page_size=page_size,
         total=total,
