@@ -899,6 +899,22 @@ async def issue_prescription(
                     "INVALID_STATE",
                     "The linked prescription cannot be replaced.",
                 )
+        # Locks may have taken time to acquire.
+        # Recheck current permission before changing prescription state.
+        authorized_source = await require_prescription_access(
+            session,
+            user=user,
+            request=request,
+            patient_id=prescription.patient_user_id,
+            consultation_id=prescription.consultation_id,
+            clinical_write=True,
+        )
+
+        if authorized_source != "doctor":
+            raise forbidden(request)
+
+        previous_version = prescription.version
+        now = datetime.now(UTC)
 
         previous_version = prescription.version
         now = datetime.now(UTC)

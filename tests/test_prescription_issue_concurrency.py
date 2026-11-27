@@ -15,6 +15,7 @@ from app.database import models as _models  # noqa: F401
 from app.modules.audit.models import AuditEvent
 from app.modules.consent.models import AccessGrant, GrantCategory
 from app.modules.consultations.models import Consultation
+from app.modules.identity.auth import AuthenticationError
 from app.modules.identity.models import Role, User, UserRole
 from app.modules.medication import repository as medication_repository
 from app.modules.medication import service as medication_service
@@ -383,3 +384,165 @@ class PrescriptionIssueConcurrencyTests(IsolatedAsyncioTestCase):
                 all(row.status == "cancelled" for row in schedules),
                 [row.status for row in schedules],
             )
+
+    async def test_expired_grant_during_lock_wait_denies_issue(self):
+        # Prepare an original prescription, its schedule and a replacement draft.
+        async with self.sessions() as session:
+            draft = await session.get(Prescription, self.prescription_id)
+            now = await session.scalar(select(func.clock_timestamp()))
+
+            original = Prescription(
+                patient_user_id=draft.patient_user_id,
+                prescriber_user_id=self.doctor_id,
+                consultation_id=draft.consultation_id,
+                source="doctor",
+                status="active",
+                starts_on=draft.starts_on,
+                ends_on=draft.ends_on,
+                issued_at=now,
+                created_by=self.doctor_id,
+                version=1,
+            )
+            session.add(original)
+            await session.flush()
+
+            item = PrescriptionItem(
+                prescription_id=original.id,
+                medicine_name_snapshot="Synthetic original",
+                dose_text="Synthetic dose",
+                route="Oral",
+                frequency="Daily",
+                duration_days=3,
+                quantity=3,
+                quantity_unit="tablet",
+                is_prn=False,
+            )
+            session.add(item)
+            await session.flush()
+
+            schedule = MedicationSchedule(
+                prescription_item_id=item.id,
+                patient_user_id=draft.patient_user_id,
+                timezone="Asia/Colombo",
+                starts_at=now,
+                confirmed_at=now,
+                status="active",
+                version=1,
+            )
+            session.add(schedule)
+            draft.previous_prescription_id = original.id
+
+            grant = await session.scalar(
+                select(AccessGrant).where(
+                    AccessGrant.professional_user_id == self.doctor_id,
+                    AccessGrant.patient_user_id == draft.patient_user_id,
+                )
+            )
+            self.assertIsNotNone(grant)
+
+            # The grant is valid initially, but expires during the lock wait.
+            expires_at = now + timedelta(seconds=10)
+            grant.expires_at = expires_at
+
+            await session.flush()
+            original_id = original.id
+            schedule_id = schedule.id
+            draft_version = draft.version
+            await session.commit()
+
+        issue_connected = asyncio.Event()
+        issue_pid = None
+
+        async def issue_replacement():
+            nonlocal issue_pid
+
+            async with self.sessions() as session:
+                issue_pid = await session.scalar(select(func.pg_backend_pid()))
+                issue_connected.set()
+
+                doctor = await session.get(User, self.doctor_id)
+                request = SimpleNamespace(state=SimpleNamespace(request_id=str(uuid4())))
+                return await service.issue_prescription(
+                    session=session,
+                    user=doctor,
+                    request=request,
+                    prescription_id=self.prescription_id,
+                )
+
+        issue_task = None
+
+        async with self.sessions() as blocker:
+            # Hold the original prescription lock in another connection.
+            await repository.lock_prescription(blocker, original_id)
+
+            try:
+                issue_task = asyncio.create_task(issue_replacement())
+                await asyncio.wait_for(issue_connected.wait(), timeout=5)
+
+                async with self.sessions() as observer:
+                    blocked = False
+
+                    for _ in range(100):
+                        blockers = await observer.scalar(select(func.pg_blocking_pids(issue_pid)))
+                        if blockers:
+                            blocked = True
+                            break
+                        await asyncio.sleep(0.05)
+
+                    self.assertTrue(
+                        blocked,
+                        "Issuance did not reach the expected database lock wait.",
+                    )
+
+                    # Wait until the database clock confirms the grant expired.
+                    database_now = await observer.scalar(select(func.clock_timestamp()))
+                    remaining = (expires_at - database_now).total_seconds()
+                    await asyncio.sleep(max(0, remaining) + 0.1)
+
+                    database_now = await observer.scalar(select(func.clock_timestamp()))
+                    self.assertGreaterEqual(database_now, expires_at)
+
+                # Issuance can now continue, but permission has expired.
+                await blocker.commit()
+
+                with self.assertRaises(AuthenticationError) as caught:
+                    await asyncio.wait_for(issue_task, timeout=10)
+
+                self.assertEqual(caught.exception.status_code, 403)
+                self.assertEqual(
+                    caught.exception.detail["code"],
+                    "ACCESS_DENIED",
+                )
+            finally:
+                await blocker.rollback()
+
+                if issue_task is not None:
+                    if not issue_task.done():
+                        issue_task.cancel()
+                    await asyncio.gather(issue_task, return_exceptions=True)
+
+        # A denied request must not change any prescription or schedule.
+        async with self.sessions() as session:
+            original = await session.get(Prescription, original_id)
+            draft = await session.get(Prescription, self.prescription_id)
+            schedule = await session.get(MedicationSchedule, schedule_id)
+
+            self.assertEqual(original.status, "active")
+            self.assertEqual(original.version, 1)
+
+            self.assertEqual(draft.status, "draft")
+            self.assertIsNone(draft.issued_at)
+            self.assertEqual(draft.version, draft_version)
+
+            self.assertEqual(schedule.status, "active")
+            self.assertEqual(schedule.version, 1)
+
+            event_count = await session.scalar(
+                select(func.count())
+                .select_from(AuditEvent)
+                .where(
+                    AuditEvent.target_id.in_([original_id, self.prescription_id]),
+                    AuditEvent.action.in_(["prescription.issued", "prescription.superseded"]),
+                )
+            )
+            self.assertEqual(event_count, 0)

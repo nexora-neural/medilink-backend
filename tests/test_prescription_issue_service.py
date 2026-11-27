@@ -95,14 +95,20 @@ class PrescriptionIssueServiceTests(IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.prescription.issued_at)
         self.assertEqual(self.prescription.version, 2)
 
-        self.access.assert_awaited_once_with(
-            self.session,
-            user=self.user,
-            request=self.request,
-            patient_id=self.prescription.patient_user_id,
-            consultation_id=self.prescription.consultation_id,
-            clinical_write=True,
-        )
+        self.assertEqual(self.access.await_count, 2)
+
+        for access_call in self.access.await_args_list:
+            self.assertEqual(access_call.args, (self.session,))
+            self.assertEqual(
+                access_call.kwargs,
+                {
+                    "user": self.user,
+                    "request": self.request,
+                    "patient_id": self.prescription.patient_user_id,
+                    "consultation_id": self.prescription.consultation_id,
+                    "clinical_write": True,
+                },
+            )
         self.references.assert_awaited_once()
         self.session.flush.assert_awaited_once()
         self.audit.assert_awaited_once()
@@ -124,7 +130,7 @@ class PrescriptionIssueServiceTests(IsolatedAsyncioTestCase):
 
         self.assertEqual(self.prescription.version, 2)
         self.assertEqual(self.prescription.issued_at, issued_at)
-        self.assertEqual(self.access.await_count, 2)
+        self.assertEqual(self.access.await_count, 3)
         self.audit.assert_awaited_once()
         self.session.flush.assert_awaited_once()
 
