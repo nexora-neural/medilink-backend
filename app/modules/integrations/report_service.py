@@ -49,7 +49,18 @@ async def submit(db, client, upload, media_type, fields, key, request_id, report
         except IdempotencyConflict as exc:
             raise LabUploadRequestError(409, 'IDEMPOTENCY_CONFLICT', str(exc)) from exc
         if replay:
-            return IntegrationSubmissionRead.model_validate(replay['response_body'])
+            result = IntegrationSubmissionRead.model_validate(replay['response_body'])
+            await append_event(
+                db,
+                actor_client_id=client.id,
+                action='integration.report_replayed',
+                target_type='integration_submission',
+                target_id=result.id,
+                outcome='success',
+                request_id=request_id,
+            )
+            await db.commit()
+            return result
 
         # Serialize both new submissions and external IDs, including across different keys.
         lock_value = int.from_bytes(hashlib.sha256((str(client.id) + ':' + fields['external_report_id']).encode()).digest()[:8], 'big', signed=True)
