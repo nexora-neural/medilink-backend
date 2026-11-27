@@ -153,9 +153,16 @@ async def onboard_identity(session: AsyncSession, identity: dict, data: OnboardR
                         if data.requested_role == "doctor"
                         else None
                     ),
+                    registration_number=data.professional_registration_number,
+                    workplace=data.workplace,
                     verification_status="not_submitted",
                 )
             )
+        else:
+            if data.professional_registration_number is not None:
+                profile.registration_number = data.professional_registration_number
+            if data.workplace is not None:
+                profile.workplace = data.workplace
 
     await session.flush()
 

@@ -164,6 +164,8 @@ class ProfessionalOnboardingSecurityTests(IsolatedAsyncioTestCase):
                     {
                         "display_name": "Synthetic Professional",
                         "requested_role": requested_role,
+                        "professional_registration_number": "REG-123",
+                        "workplace": "Demo Clinic",
                     }
                 )
 
@@ -198,6 +200,8 @@ class ProfessionalOnboardingSecurityTests(IsolatedAsyncioTestCase):
                     created_profile.verification_status,
                     "not_submitted",
                 )
+                self.assertEqual(created_profile.registration_number, "REG-123")
+                self.assertEqual(created_profile.workplace, "Demo Clinic")
 
 
 @skipUnless(
