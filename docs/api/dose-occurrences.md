@@ -37,7 +37,8 @@ python -m app.workers.dose_occurrences
 
 Each pass locks a bounded batch of active schedules with `SKIP LOCKED`, generates
 fixed local-time occurrences through the next 24 hours, and advances the schedule's
-generation cursor in the same transaction. The existing unique
+generation cursor in the same transaction. The least recently processed schedules
+are selected first so batches rotate fairly. The existing unique
 `(schedule_id, scheduled_for)` constraint and conflict-safe inserts make repeated
 passes and worker retries idempotent. A catch-up pass is capped at 31 calendar
 days per schedule; later passes continue from the cursor. A schedule confirmed
@@ -51,6 +52,8 @@ rows provide separate in-app reminder delivery evidence and use a dedupe key per
 occurrence/reminder slot. A pending snooze suppresses delivery until its target;
 after delivery, the notification row retains the evidence and the pending time is
 cleared. Repeated passes cannot duplicate an already delivered reminder.
+When snoozed before the first reminder, the snoozed delivery replaces the original
+reminder; a later pass does not send the original as well.
 
 The worker skips nonexistent wall-clock times on daylight-saving transitions and
 uses the earlier offset for ambiguous local times. It does not send reminders for

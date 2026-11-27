@@ -285,6 +285,61 @@ class DoseOccurrencePostgresTests(IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_batch_rotation_processes_every_schedule(self):
+        schedule_id = await self.create_schedule()
+        first = await self.db.get(MedicationSchedule, schedule_id)
+        first.confirmed_at = self.scheduled_today - timedelta(days=1)
+        first.occurrences_generated_through = self.scheduled_today - timedelta(seconds=1)
+        item = PrescriptionItem(
+            prescription_id=self.prescription.id,
+            medicine_name_snapshot="Synthetic second medicine",
+            dose_text="Synthetic dose", frequency="daily", duration_days=13, is_prn=False,
+        )
+        self.db.add(item)
+        await self.db.flush()
+        second = MedicationSchedule(
+            id=uuid4(), prescription_item_id=item.id, patient_user_id=self.patient.id,
+            timezone="UTC", starts_at=first.starts_at, ends_at=first.ends_at,
+            confirmed_at=first.confirmed_at,
+            occurrences_generated_through=first.occurrences_generated_through,
+            status="active", version=1,
+        )
+        self.db.add(second)
+        await self.db.flush()
+        self.db.add(ScheduleTime(schedule_id=second.id, time_of_day=self.daily_time))
+        await self.db.commit()
+        for _ in range(4):
+            await process_active_schedules(self.db, now=self.now, batch_size=1)
+            await self.db.commit()
+        for schedule in (first, second):
+            count = await self.db.scalar(
+                select(func.count()).select_from(DoseOccurrence).where(
+                    DoseOccurrence.schedule_id == schedule.id
+                )
+            )
+            self.assertGreater(count, 0)
+
+    async def test_snooze_before_first_reminder_replaces_original(self):
+        schedule_id = await self.create_schedule()
+        schedule = await self.db.get(MedicationSchedule, schedule_id)
+        schedule.confirmed_at = self.now - timedelta(days=1)
+        occurrence = await self.add_occurrence(
+            schedule_id, self.now - timedelta(minutes=1), status="unreported"
+        )
+        until = self.now + timedelta(minutes=10)
+        response = await self.snooze(occurrence.id, until)
+        self.assertEqual(response.status_code, 201, response.text)
+        for instant in (self.now, until + timedelta(seconds=1), until + timedelta(seconds=2)):
+            await process_active_schedules(self.db, now=instant)
+            await self.db.commit()
+        self.assertEqual(
+            await self.db.scalar(select(func.count()).select_from(Notification).where(
+                Notification.related_id == occurrence.id
+            )), 1
+        )
+        await self.db.refresh(occurrence)
+        self.assertIsNone(occurrence.snoozed_until)
+
     async def test_worker_sets_due_at_schedule_then_unreported_on_first_later_evaluation(self):
         schedule_id = await self.create_schedule()
         schedule = await self.db.get(MedicationSchedule, schedule_id)

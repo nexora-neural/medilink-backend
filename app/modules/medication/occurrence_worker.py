@@ -62,6 +62,14 @@ async def _deliver_due_reminders(session: AsyncSession, schedule, now, active_si
         # dose that occurred while the schedule was paused.
         if snooze_time is None and occurrence.scheduled_for < active_since:
             continue
+        if snooze_time is None and await session.scalar(
+            select(Notification.id).where(
+                Notification.related_type == "dose_occurrence",
+                Notification.related_id == occurrence.id,
+                Notification.notification_type == "dose_reminder",
+            ).limit(1)
+        ):
+            continue
         delivery_slot = (
             f"snooze:{int(snooze_time.timestamp() * 1_000_000)}"
             if snooze_time is not None
@@ -112,7 +120,10 @@ async def process_active_schedules(
                 MedicationSchedule.status == ScheduleStatus.ACTIVE,
                 MedicationSchedule.starts_at <= horizon,
             )
-            .order_by(MedicationSchedule.starts_at, MedicationSchedule.id)
+            .order_by(
+                MedicationSchedule.occurrences_worker_processed_at.asc().nulls_first(),
+                MedicationSchedule.id,
+            )
             .limit(batch_size)
             .with_for_update(skip_locked=True)
         )
@@ -120,6 +131,9 @@ async def process_active_schedules(
 
     changed = 0
     for schedule in schedules:
+        schedule.occurrences_worker_processed_at = await session.scalar(
+            select(func.clock_timestamp())
+        )
         zone = ZoneInfo(schedule.timezone)
         cursor = schedule.occurrences_generated_through
         start = max(cursor, schedule.starts_at, schedule.confirmed_at)
