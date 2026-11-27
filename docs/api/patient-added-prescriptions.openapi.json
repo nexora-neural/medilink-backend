@@ -1,0 +1,578 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ML-140 patient-added prescription confirmation",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/v1/prescriptions/{prescription_id}/confirm": {
+      "post": {
+        "tags": [
+          "Prescriptions"
+        ],
+        "summary": "Confirm patient-added draft for personal use",
+        "description": "After reviewing the saved items, the owning patient explicitly confirms the draft. No body or query parameters. Source remains patient and confirmation does not grant clinical verification or dispensing permission.",
+        "operationId": "medilink_048",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "prescription_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Prescription Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrescriptionDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body is not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClinicalWriteErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClinicalWriteErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Current patient role required or forbidden source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClinicalWriteErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Prescription absent or concealed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClinicalWriteErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Invalid prescription state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClinicalWriteErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid saved items, references or query parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClinicalWriteErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Authenticated request quota exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClinicalWriteErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Safe internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClinicalWriteErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request quota store unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClinicalWriteErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ClinicalWriteErrorResponse": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "field_errors": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Field Errors"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "field_errors",
+          "request_id"
+        ],
+        "title": "ClinicalWriteErrorResponse"
+      },
+      "PrescriptionDetail": {
+        "properties": {
+          "prescription": {
+            "$ref": "#/components/schemas/PrescriptionRecordRead"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PrescriptionItemRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/PrescriptionReviewRead"
+            },
+            "type": "array",
+            "title": "Reviews"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "prescription",
+          "items",
+          "reviews"
+        ],
+        "title": "PrescriptionDetail"
+      },
+      "PrescriptionItemRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "prescription_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Prescription Id"
+          },
+          "medicine_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Medicine Id"
+          },
+          "medicine_name_snapshot": {
+            "type": "string",
+            "title": "Medicine Name Snapshot"
+          },
+          "dose_text": {
+            "type": "string",
+            "title": "Dose Text"
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
+          },
+          "frequency": {
+            "type": "string",
+            "title": "Frequency"
+          },
+          "duration_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Days"
+          },
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "quantity_unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity Unit"
+          },
+          "is_prn": {
+            "type": "boolean",
+            "title": "Is Prn"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "prescription_id",
+          "medicine_id",
+          "medicine_name_snapshot",
+          "dose_text",
+          "route",
+          "frequency",
+          "duration_days",
+          "instructions",
+          "quantity",
+          "quantity_unit",
+          "is_prn",
+          "created_at"
+        ],
+        "title": "PrescriptionItemRead"
+      },
+      "PrescriptionRecordRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "patient_user_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Patient User Id"
+          },
+          "consultation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consultation Id"
+          },
+          "prescriber_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prescriber User Id"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "claimed_prescriber": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimed Prescriber"
+          },
+          "review_status": {
+            "type": "string",
+            "title": "Review Status"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "issued_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issued At"
+          },
+          "starts_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Starts On"
+          },
+          "ends_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ends On"
+          },
+          "previous_prescription_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Prescription Id"
+          },
+          "original_document_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Document Id"
+          },
+          "created_by": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Created By"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "patient_user_id",
+          "consultation_id",
+          "prescriber_user_id",
+          "source",
+          "claimed_prescriber",
+          "review_status",
+          "reviewed_by",
+          "reviewed_at",
+          "status",
+          "issued_at",
+          "starts_on",
+          "ends_on",
+          "previous_prescription_id",
+          "original_document_id",
+          "created_by",
+          "created_at",
+          "updated_at",
+          "version",
+          "status_reason"
+        ],
+        "title": "PrescriptionRecordRead"
+      },
+      "PrescriptionReviewRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "prescription_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Prescription Id"
+          },
+          "reviewer_user_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Reviewer User Id"
+          },
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "prescription_id",
+          "reviewer_user_id",
+          "outcome",
+          "notes",
+          "reviewed_at"
+        ],
+        "title": "PrescriptionReviewRead"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  }
+}
