@@ -6178,7 +6178,7 @@
           "Prescriptions"
         ],
         "summary": "Confirm patient-added draft",
-        "description": "Allowed actor: Patient: own record. Sets active/issued_at for personal use; source remains patient, not clinically verified. Requires item review.",
+        "description": "Allowed actor: Patient: own record. Sets active/issued_at for personal use; source remains patient, not clinically verified. Requires item review. Explicit bodyless patient action after review of 1\u2013100 saved items. No query fields. State-idempotent retry returns the current active patient-source record without another transition or audit event. Terminal states return 409. Confirmation does not authorize clinical issue or dispensing.",
         "security": [
           {
             "FirebaseBearer": []
@@ -6191,6 +6191,19 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PrescriptionDetail"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              },
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -6267,6 +6280,16 @@
           },
           "500": {
             "description": "Unexpected failure with safe request_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Identity or request quota service unavailable",
             "content": {
               "application/json": {
                 "schema": {
