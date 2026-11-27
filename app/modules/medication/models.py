@@ -111,11 +111,45 @@ class MedicationSchedule(Base):
         server_default=text("1"),
     )
 
+    previous_schedule_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("medication_schedules.id", name="fk_schedule_previous", ondelete="RESTRICT"),
+        unique=True,
+    )
+
     schedule_times: Mapped[list["ScheduleTime"]] = relationship(
         back_populates="schedule",
     )
     dose_occurrences: Mapped[list["DoseOccurrence"]] = relationship(
         back_populates="schedule",
+    )
+
+
+class ScheduleStatusChange(Base):
+    """Private reason and status history; never placed in generic audit metadata."""
+
+    __tablename__ = "medication_schedule_status_changes"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    schedule_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("medication_schedules.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    recorded_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    previous_status: Mapped[ScheduleStatus] = mapped_column(schedule_status_enum, nullable=False)
+    status: Mapped[ScheduleStatus] = mapped_column(schedule_status_enum, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
 
 

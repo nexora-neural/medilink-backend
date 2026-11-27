@@ -45,6 +45,8 @@ class OnboardRequest(ProfileInput):
     display_name: str = Field(min_length=1, max_length=150)
     phone: str | None = Field(default=None, max_length=32)
     requested_role: Literal["patient", "doctor", "pharmacist", "lab_staff"]
+    professional_registration_number: str | None = Field(default=None, max_length=100)
+    workplace: str | None = Field(default=None, max_length=200)
     date_of_birth: date | None = None
     sex: Literal["female", "male"] | None = None
 
@@ -63,6 +65,15 @@ class OnboardRequest(ProfileInput):
             raise ValueError("Patient onboarding requires date_of_birth and sex.")
         if self.date_of_birth is not None and self.date_of_birth > date.today():
             raise ValueError("date_of_birth cannot be in the future.")
+        if self.requested_role == "patient" and self.model_fields_set & {
+            "professional_registration_number",
+            "workplace",
+        }:
+            raise ValueError("Professional fields are only accepted for professional onboarding.")
+        for field_name in ("professional_registration_number", "workplace"):
+            value = getattr(self, field_name)
+            if value is not None and not value.strip():
+                raise ValueError(f"{field_name} must not be blank.")
         if self.requested_role != "patient" and self.model_fields_set & {
             "date_of_birth",
             "sex",
@@ -161,6 +172,7 @@ class ProfessionalProfileResponse(BaseModel):
     role: str
     doctor_reference: str | None = None
     registration_number: str | None = None
+    workplace: str | None = None
     qualifications: str | None = None
     specialty: str | None = None
     verification_status: str

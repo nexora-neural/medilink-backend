@@ -63,6 +63,7 @@ class VerificationApplication(Base):
     )
     role: Mapped[str] = mapped_column(professional_role_type, nullable=False)
     registration_number: Mapped[str | None] = mapped_column(Text)
+    workplace: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(
         verification_status_type,
         nullable=False,

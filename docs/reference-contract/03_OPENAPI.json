@@ -6178,7 +6178,7 @@
           "Prescriptions"
         ],
         "summary": "Confirm patient-added draft",
-        "description": "Allowed actor: Patient: own record. Sets active/issued_at for personal use; source remains patient, not clinically verified. Requires item review.",
+        "description": "Allowed actor: Patient: own record. Sets active/issued_at for personal use; source remains patient, not clinically verified. Requires item review. Explicit bodyless patient action after review of 1\u2013100 saved items. No query fields. State-idempotent retry returns the current active patient-source record without another transition or audit event. Terminal states return 409. Confirmation does not authorize clinical issue or dispensing.",
         "security": [
           {
             "FirebaseBearer": []
@@ -6191,6 +6191,19 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PrescriptionDetail"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              },
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -6267,6 +6280,16 @@
           },
           "500": {
             "description": "Unexpected failure with safe request_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Identity or request quota service unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -9167,6 +9190,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current schedule version as a positive integer, optionally quoted. Stale version: 409 STALE_VERSION."
           }
         ],
         "requestBody": {
@@ -9296,6 +9328,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current schedule version as a positive integer, optionally quoted. Stale version: 409 STALE_VERSION."
           }
         ],
         "requestBody": {
@@ -18630,6 +18671,12 @@
           },
           "version": {
             "type": "integer"
+          },
+          "previous_schedule_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "Retained predecessor of a replacement schedule."
           }
         },
         "required": [
@@ -20797,7 +20844,8 @@
             "items": {
               "type": "string",
               "pattern": "^([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d$"
-            }
+            },
+            "maxItems": 24
           },
           "confirmed": {
             "type": "boolean",
@@ -20826,6 +20874,16 @@
             "items": {
               "$ref": "#/components/schemas/ScheduleTimesRead"
             }
+          },
+          "prescription_source": {
+            "type": "string",
+            "enum": [
+              "patient",
+              "doctor",
+              "approved_external_system"
+            ],
+            "nullable": true,
+            "description": "Server-derived original prescription source; scheduling does not upgrade it."
           }
         },
         "required": [

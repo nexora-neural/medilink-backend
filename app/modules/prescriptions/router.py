@@ -13,6 +13,7 @@ from app.modules.identity.models import User
 from app.modules.identity.request_limits import require_authenticated_rate_limit
 from app.modules.prescriptions import service
 from app.modules.prescriptions.schemas import (
+    ClinicalWriteErrorResponse,
     MedicineInput,
     MedicinesRead,
     MedicinesReadPage,
@@ -33,6 +34,65 @@ medicine_router = APIRouter(
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 UserDep = Annotated[User, Depends(get_current_user)]
+
+
+@router.post(
+    "/prescriptions/{prescription_id}/confirm",
+    operation_id="medilink_048",
+    response_model=PrescriptionDetail,
+    status_code=status.HTTP_200_OK,
+    summary="Confirm patient-added draft for personal use",
+    description=(
+        "After reviewing the saved items, the owning patient explicitly confirms "
+        "the draft. No body or query parameters. Source remains patient and "
+        "confirmation does not grant clinical verification or dispensing permission."
+    ),
+    dependencies=[Depends(require_authenticated_rate_limit)],
+    responses={
+        code: {"model": ClinicalWriteErrorResponse, "description": description}
+        for code, description in {
+            400: "Request body is not allowed",
+            401: "Missing or invalid identity",
+            403: "Current patient role required or forbidden source",
+            404: "Prescription absent or concealed",
+            409: "Invalid prescription state",
+            422: "Invalid saved items, references or query parameters",
+            429: "Authenticated request quota exceeded",
+            500: "Safe internal error",
+            503: "Request quota store unavailable",
+        }.items()
+    },
+)
+async def confirm_patient_prescription(
+    prescription_id: UUID,
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    current_user: UserDep,
+) -> PrescriptionDetail:
+    """The explicit action confirms saved items; clients cannot promote source."""
+    if request.query_params:
+        raise service.confirmation_error(
+            request,
+            422,
+            "VALIDATION_ERROR",
+            "Query parameters are not allowed.",
+            {"query": ["Unknown query parameter."]},
+        )
+    # Read at most the first nonempty chunk: never buffer an unsolicited upload.
+    async for chunk in request.stream():
+        if chunk:
+            raise service.confirmation_error(
+                request, 400, "INVALID_REQUEST", "This operation does not accept a body."
+            )
+    result = await service.confirm_patient_draft(
+        session=session,
+        user=current_user,
+        request=request,
+        prescription_id=prescription_id,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @medicine_router.get(

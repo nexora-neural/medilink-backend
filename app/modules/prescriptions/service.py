@@ -36,8 +36,140 @@ from app.modules.prescriptions.schemas import (
     PrescriptionDetailPage,
     PrescriptionInput,
     PrescriptionIssueContent,
+    PrescriptionItemInput,
 )
 from app.modules.profiles.models import ProfessionalProfile
+
+
+def confirmation_error(
+    request: Request,
+    status_code: int,
+    code: str,
+    message: str,
+    field_errors: dict[str, list[str]] | None = None,
+) -> AuthenticationError:
+    """Build a safe action error without copying saved clinical data."""
+    return AuthenticationError(
+        status_code=status_code,
+        detail={
+            "code": code,
+            "message": message,
+            "field_errors": field_errors or {},
+            "request_id": getattr(request.state, "request_id", ""),
+        },
+    )
+
+
+async def confirm_patient_draft(
+    *,
+    session: AsyncSession,
+    user: User,
+    request: Request,
+    prescription_id: UUID,
+) -> PrescriptionDetail:
+    """Confirm reviewed personal data once, under the draft editor's row lock.
+
+    The bodyless POST is the patient's explicit review acknowledgement. It
+    freezes the saved items, never reinterprets dosing and never issues a
+    doctor order. Audit failure rolls back the state, timestamp and version.
+    """
+    try:
+        prescription = await repository.lock_prescription(session, prescription_id)
+        if prescription is None or prescription.patient_user_id != user.id:
+            raise confirmation_error(request, 404, "RESOURCE_NOT_FOUND", "Prescription not found.")
+        authorized_source = await require_prescription_access(
+            session,
+            user=user,
+            request=request,
+            patient_id=prescription.patient_user_id,
+            clinical_write=True,
+        )
+        if authorized_source != "patient" or prescription.source != "patient":
+            raise forbidden(request)
+        if prescription.prescriber_user_id is not None or prescription.consultation_id is not None:
+            raise confirmation_error(
+                request, 409, "INVALID_STATE", "This record cannot be confirmed as patient-added."
+            )
+
+        if prescription.status == PrescriptionStatus.ACTIVE and prescription.issued_at is not None:
+            # Network retries do not duplicate events, reset a later review,
+            # increment the version, or change the first confirmation time.
+            result = await build_prescription_detail(session, prescription)
+            await session.commit()
+            return result
+        if (
+            prescription.status != PrescriptionStatus.DRAFT
+            or prescription.issued_at is not None
+            or prescription.review_status != PrescriptionReviewStatus.NOT_REVIEWED
+            or prescription.reviewed_by is not None
+            or prescription.reviewed_at is not None
+        ):
+            raise confirmation_error(
+                request, 409, "INVALID_STATE", "Only an unconfirmed patient draft can be confirmed."
+            )
+
+        detail = await build_prescription_detail(session, prescription)
+        # Revalidate saved/imported data as well as new API drafts. Optional
+        # quantity/route/course fields stay optional for personal records.
+        try:
+            if not 1 <= len(detail.items) <= 100 or detail.reviews:
+                raise ValueError
+            payload = PrescriptionInput(
+                claimed_prescriber=prescription.claimed_prescriber,
+                starts_on=prescription.starts_on,
+                ends_on=prescription.ends_on,
+                original_document_id=prescription.original_document_id,
+                items=[
+                    PrescriptionItemInput.model_validate(
+                        item.model_dump(exclude={"id", "prescription_id", "created_at"})
+                    )
+                    for item in detail.items
+                ],
+            )
+        except (ValidationError, ValueError):
+            raise confirmation_error(
+                request,
+                422,
+                "VALIDATION_ERROR",
+                "Review and correct the saved draft before confirming.",
+                {"items": ["Review 1 to 100 valid medicine items and the saved course dates."]},
+            ) from None
+        await validate_draft_references(
+            session,
+            request=request,
+            patient_id=prescription.patient_user_id,
+            payload=payload,
+        )
+
+        previous_version = prescription.version
+        prescription.status = PrescriptionStatus.ACTIVE
+        prescription.issued_at = datetime.now(UTC)
+        prescription.updated_at = prescription.issued_at
+        prescription.version += 1
+        await session.flush()
+        await append_event(
+            session,
+            actor_user_id=user.id,
+            action="prescription.patient.confirmed",
+            target_type="prescriptions",
+            target_id=prescription.id,
+            outcome="success",
+            request_id=getattr(request.state, "request_id", ""),
+            metadata={
+                "source": "patient",
+                "previous_status": "draft",
+                "status": "active",
+                "previous_version": previous_version,
+                "new_version": prescription.version,
+                "item_count": len(detail.items),
+            },
+        )
+        result = await build_prescription_detail(session, prescription)
+        await session.commit()
+        return result
+    except Exception:
+        await session.rollback()
+        raise
 
 
 def forbidden(request: Request) -> AuthenticationError:

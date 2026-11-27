@@ -130,6 +130,11 @@ async def update_professional_profile(
             and "registration_number" in payload.model_fields_set
             and profile.registration_number != payload.registration_number
         )
+        workplace_changed = (
+            profile is not None
+            and "workplace" in payload.model_fields_set
+            and profile.workplace != payload.workplace
+        )
         if role_changed and any(a.status in {"pending", "not_submitted"} for a in existing):
             raise _error(
                 request,
@@ -142,7 +147,7 @@ async def update_professional_profile(
         reverify = (
             profile is not None
             and profile.verification_status == "approved"
-            and (role_changed or registration_changed)
+            and (role_changed or registration_changed or workplace_changed)
         )
         if reverify:
             await _revoke_professional_access(db, user.id)
@@ -165,7 +170,7 @@ async def update_professional_profile(
             profile.doctor_reference = uuid4().hex if payload.role.value == "doctor" else None
             changed_fields.append("role")
 
-        for field in ("registration_number", "qualifications", "specialty"):
+        for field in ("registration_number", "workplace", "qualifications", "specialty"):
             if field not in payload.model_fields_set:
                 continue
             value = getattr(payload, field)
@@ -254,6 +259,7 @@ async def submit_application(
             organization_id=payload.organization_id,
             role=payload.role.value,
             registration_number=payload.registration_number,
+            workplace=payload.workplace or profile.workplace,
             status="pending",
         )
         db.add(application)

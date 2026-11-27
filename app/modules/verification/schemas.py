@@ -16,10 +16,11 @@ class VerificationInput(BaseModel):
 class ProfessionalProfileInput(VerificationInput):
     role: ProfessionalRole
     registration_number: str | None = Field(default=None, max_length=100)
+    workplace: str | None = Field(default=None, max_length=200)
     qualifications: str | None = Field(default=None, max_length=2000)
     specialty: str | None = Field(default=None, max_length=150)
 
-    @field_validator("registration_number", "qualifications", "specialty")
+    @field_validator("registration_number", "workplace", "qualifications", "specialty")
     @classmethod
     def normalize_text(cls, value: str | None) -> str | None:
         return None if value is not None and not value.strip() else value
@@ -32,6 +33,7 @@ class ProfessionalProfileRead(BaseModel):
     role: ProfessionalRole
     doctor_reference: str | None
     registration_number: str | None
+    workplace: str | None
     qualifications: str | None
     specialty: str | None
     verification_status: str
@@ -43,6 +45,7 @@ class VerificationApplicationInput(VerificationInput):
     role: ProfessionalRole
     organization_id: UUID | None = None
     registration_number: str = Field(min_length=1, max_length=100)
+    workplace: str | None = Field(default=None, max_length=200)
     evidence_document_ids: list[UUID] = Field(min_length=1, max_length=20)
 
     @field_validator("registration_number")
@@ -51,6 +54,11 @@ class VerificationApplicationInput(VerificationInput):
         if not value.strip():
             raise ValueError("Registration number must not be blank.")
         return value
+
+    @field_validator("workplace")
+    @classmethod
+    def nonblank_workplace(cls, value: str | None) -> str | None:
+        return None if value is not None and not value.strip() else value
 
     @model_validator(mode="after")
     def unique_evidence(self):
@@ -67,6 +75,7 @@ class VerificationApplicationRead(BaseModel):
     organization_id: UUID | None
     role: ProfessionalRole
     registration_number: str | None
+    workplace: str | None = None
     status: str
     submitted_at: datetime
     reviewed_by: UUID | None

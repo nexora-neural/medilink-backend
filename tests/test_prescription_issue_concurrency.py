@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, skipUnless
 from unittest.mock import patch
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -117,8 +118,8 @@ class PrescriptionIssueConcurrencyTests(IsolatedAsyncioTestCase):
                 consultation_id=consultation.id,
                 source="doctor",
                 status="draft",
-                starts_on=date(2026, 11, 25),
-                ends_on=date(2026, 11, 27),
+                starts_on=now.astimezone(ZoneInfo("Asia/Colombo")).date(),
+                ends_on=(now.astimezone(ZoneInfo("Asia/Colombo")).date() + timedelta(days=2)),
                 created_by=doctor.id,
                 version=1,
             )
@@ -131,7 +132,7 @@ class PrescriptionIssueConcurrencyTests(IsolatedAsyncioTestCase):
                     medicine_name_snapshot="Synthetic medicine",
                     dose_text="Synthetic dose",
                     route="Oral",
-                    frequency="Synthetic frequency",
+                    frequency="daily",
                     duration_days=3,
                     quantity=3,
                     quantity_unit="tablet",
@@ -257,7 +258,7 @@ class PrescriptionIssueConcurrencyTests(IsolatedAsyncioTestCase):
                     medicine_name_snapshot="Synthetic replacement",
                     dose_text="Synthetic dose",
                     route="Oral",
-                    frequency="Synthetic frequency",
+                    frequency="daily",
                     duration_days=3,
                     quantity=3,
                     quantity_unit="tablet",
@@ -275,7 +276,7 @@ class PrescriptionIssueConcurrencyTests(IsolatedAsyncioTestCase):
             prescription_item_id=item_id,
             timezone="Asia/Colombo",
             starts_at=now + timedelta(minutes=10),
-            ends_at=now + timedelta(days=2),
+            ends_at=now + timedelta(days=1),
             times=["08:00:00"],
             confirmed=True,
         )

@@ -226,7 +226,7 @@ Path identifiers are UUIDs. `Idempotency-Key` marked **required** is a request h
 - `GET /api/v1/prescriptions/{prescription_id}`: Pharmacist uses share-specific projection route instead.
 - `PUT /api/v1/prescriptions/{prescription_id}/draft`: Draft only; atomically replace items, no published histories deleted.
 - `DELETE /api/v1/prescriptions/{prescription_id}/draft`: Only unconfirmed, never issued drafts with no dependent published records. Private unlinked files follow cleanup policy.
-- `POST /api/v1/prescriptions/{prescription_id}/confirm`: Sets active/issued_at for personal use; source remains patient, not clinically verified. Requires item review.
+- `POST /api/v1/prescriptions/{prescription_id}/confirm`: Sets active/issued_at for personal use; source remains patient, not clinically verified. Requires item review. ML-140 implements the explicit bodyless action after review of the saved 1–100 valid items. Rechecks active patient ownership/role and current evidence; preserves source, issuer and clinical/review content. Already confirmed active patient records return unchanged current detail; terminal records return 409. Unknown query parameters return 422 and any body returns 400. The transition and one minimal domain audit event commit atomically; quota and private-response headers apply. See [implementation and test notes](../api/patient-added-prescriptions.md).
 - `POST /api/v1/prescriptions/{prescription_id}/issue`: Owner doctor; current consultation permission; complete route, dose, frequency, duration, quantity/unit, dates, explicit review. Idempotent if already issued unchanged.
 - `POST /api/v1/prescriptions/{prescription_id}/reviews`: Original evidence visible under prescription grant. Never changes source or grants dispensing.
 - `POST /api/v1/prescriptions/{prescription_id}/versions`: Returns new draft linked by previous_prescription_id; reason/action persisted. Doctor renewals/reissues require separate review and issue. Reissue of patient entry makes a separate doctor-source order. Issue version atomically supersedes predecessor and cancels obsolete future doses.
@@ -282,10 +282,10 @@ Path identifiers are UUIDs. `Idempotency-Key` marked **required** is a request h
 | `GET /api/v1/dose-occurrences/{occurrence_id}/responses` | Read dose response history | Patient: own record or Verified Doctor: current category grant; clinical writes also require patient-approved consultation | No body → MedicationLogsReadPage (200) |
 | `GET /api/v1/patients/{patient_id}/adherence` | Get patient-reported adherence | Patient: own record or Verified Doctor: current category grant; clinical writes also require patient-approved consultation | No body → Adherence (200) |
 
-- `POST /api/v1/patients/{patient_id}/medication-schedules`: Patient/source labels remain visible. Daily fixed-time non-PRN only; IANA timezone; course bounds enforced; reject overlapping active schedules for same item.
+- `POST /api/v1/patients/{patient_id}/medication-schedules`: Patient/source labels remain visible. Daily fixed-time non-PRN only; IANA timezone; course bounds enforced; reject overlapping active schedules for same item. ML-155 also reserves paused windows, validates supported daily frequency/count, and requires explicit confirmation on an active issued/confirmed prescription; see [schedule policy](../api/daily-medication-schedules.md).
 - `GET /api/v1/patients/{patient_id}/medication-schedules`:  Filters: `status`.
-- `POST /api/v1/medication-schedules/{schedule_id}/status`: Reminder state only; no change to clinical dose. Resume cannot generate duplicate occurrences.
-- `POST /api/v1/medication-schedules/{schedule_id}/replacement`: Same prescription item only. Transactionally cancel old future occurrences and activate replacement; past occurrences/logs retained.
+- `POST /api/v1/medication-schedules/{schedule_id}/status`: Requires If-Match current version and a reason; terminal states cannot reopen. Reminder state only; no change to clinical dose. Resume cannot generate duplicate occurrences.
+- `POST /api/v1/medication-schedules/{schedule_id}/replacement`: Requires If-Match current version; previous_schedule_id links the retained predecessor. Same prescription item only. Transactionally cancel old future occurrences and activate replacement; past occurrences/logs retained.
 - `GET /api/v1/patients/{patient_id}/dose-occurrences`:  Filters: `from`, `to`, `status`.
 - `POST /api/v1/dose-occurrences/{occurrence_id}/snooze`: Due/unreported, unanswered, uncancelled occurrence only; future snoozed_until within 24h and schedule bounds. Approved 24h maximum; eligibility uses original scheduled_for.
 - `POST /api/v1/dose-occurrences/{occurrence_id}/responses`: taken requires reported_taken_at; skipped forbids it. Future taken time rejected, late entry allowed. Second initial response returns 409; use correction route.
@@ -864,6 +864,8 @@ or replace the existing permission and MFA checks.
 | `status` | string: active, paused, completed, cancelled | Yes |
 | `created_at` | string (date-time) | Yes |
 | `version` | integer | Yes |
+
+Optional `previous_schedule_id` (uuid) retains replacement lineage.
 
 ### ScheduleTimesRead
 
@@ -1473,6 +1475,7 @@ This response schema extends `IntegrationAdminSubmissionRead` with the idempoten
 |---|---|---|
 | `schedule` | MedicationSchedulesRead | Yes |
 | `times` | array<ScheduleTimesRead> | Yes |
+| `prescription_source` | string: patient, doctor, approved_external_system; server-derived | No |
 
 ### ScheduleAction
 
@@ -2219,8 +2222,26 @@ Lock the original, check ownership, source and active status, then atomically in
   the existing upload API. Uploading an initial report publishes it immediately
   with generated reference `upload-{upload_request_id}` and consumes the request.
   Do not call the separate publish endpoint for this already-published document.
-- Staging requires an initial laboratory report: patient self-upload,
-  verification evidence, `supersedes_id`, and `correction_reason` cannot be staged.
+- Laboratory report staging supports either an initial upload or an authorized
+  correction. Supply exactly one of `upload_request_id` or `supersedes_id`.
+  Patient self-upload, verification evidence and `correction_reason` cannot
+  be staged.
+- For an initial laboratory report, use `stage_for_report=true` with an active
+  matching `upload_request_id`. Omit `supersedes_id`.
+- For a laboratory correction, use `stage_for_report=true`,
+  `document_type=report` and `supersedes_id` set to the original report's
+  document ID, not its report ID. Omit `upload_request_id` and
+  `correction_reason`. The original report must be active, and the actor must
+  currently be verified staff of its originating laboratory. The original
+  upload request need not remain unused or unexpired.
+- Correction staging creates only the replacement document. It does not
+  supersede the original document/report, publish a report or notify the patient.
+  Publish the returned document ID through
+  `POST /api/v1/reports/{report_id}/versions`, using the original active report
+  ID, a correction reason and a required `Idempotency-Key`.
+- Correction permission does not authorize unrelated initial uploads.
+  Patient-source corrections use a normal owner-patient document upload with
+  `stage_for_report=false`, followed by the report versions endpoint.
 - Both laboratory publication flows enqueue exactly one `report_accepted`
   notification per report version in the same transaction as the report and
   request consumption. Original-laboratory corrections also notify the patient.

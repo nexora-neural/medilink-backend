@@ -17,9 +17,15 @@ from app.modules.identity.request_limits import (
     require_authenticated_rate_limit,
     require_resolution_rate_limit,
 )
-from app.modules.laboratory import report_service, service
+from app.modules.laboratory import report_corrections, report_service, service
 from app.modules.laboratory.models import ReportStatus
-from app.modules.laboratory.report_schemas import ReportInput, ReportsRead, ReportsReadPage
+from app.modules.laboratory.report_schemas import (
+    ReportInput,
+    ReportReasonInput,
+    ReportsRead,
+    ReportsReadPage,
+    ReportVersionInput,
+)
 from app.modules.laboratory.schemas import (
     LabUploadRequestCreate,
     LabUploadRequestCreated,
@@ -196,3 +202,40 @@ async def list_laboratory_reports(
     return await report_service.list_laboratory_reports(
         db, actor, page=page, page_size=page_size, from_at=from_at, to_at=to_at,
     )
+
+
+@router.post(
+    "/reports/{report_id}/versions", response_model=ReportsRead, status_code=201,
+    dependencies=[Depends(require_authenticated_rate_limit)],
+)
+async def create_report_version(
+    report_id: UUID, body: ReportVersionInput, request: Request, db: DB, actor: Actor,
+    key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
+) -> ReportsRead:
+    return await report_corrections.create_version(
+        db, actor, report_id, body, key, request.state.request_id,
+    )
+
+
+@router.post(
+    "/reports/{report_id}/withdraw", response_model=ReportsRead, status_code=201,
+    dependencies=[Depends(require_authenticated_rate_limit)],
+)
+async def withdraw_report(
+    report_id: UUID, body: ReportReasonInput, request: Request, db: DB, actor: Actor,
+) -> ReportsRead:
+    return await report_corrections.withdraw_report(
+        db, actor, report_id, body.reason, request.state.request_id,
+    )
+
+
+@router.get(
+    "/reports/{report_id}/history", response_model=ReportsReadPage,
+    dependencies=[Depends(require_authenticated_rate_limit)],
+)
+async def report_history(
+    report_id: UUID, db: DB, actor: Actor,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> ReportsReadPage:
+    return await report_corrections.get_history(db, actor, report_id, page, page_size)
