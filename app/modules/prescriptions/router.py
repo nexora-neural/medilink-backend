@@ -10,8 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.session import get_session
 from app.modules.identity.auth import get_current_user
 from app.modules.identity.models import User
-from app.modules.identity.request_limits import require_authenticated_rate_limit
-from app.modules.prescriptions import service
+from app.modules.identity.request_limits import (
+    require_authenticated_rate_limit,
+    require_upload_rate_limit,
+)
+from app.modules.prescriptions import ocr_service, service
 from app.modules.prescriptions.schemas import (
     ClinicalWriteErrorResponse,
     MedicineInput,
@@ -20,6 +23,12 @@ from app.modules.prescriptions.schemas import (
     PrescriptionDetail,
     PrescriptionDetailPage,
     PrescriptionInput,
+    PrescriptionOcrDraftCreated,
+    PrescriptionOcrDraftInput,
+    PrescriptionOcrJobInput,
+    PrescriptionOcrJobRead,
+    PrescriptionOcrJobReadPage,
+    PrescriptionOcrRetryInput,
 )
 
 router = APIRouter(tags=["Prescriptions"])
@@ -352,3 +361,200 @@ async def issue_doctor_prescription(
         request=request,
         prescription_id=prescription_id,
     )
+
+
+_OCR_ERROR_RESPONSES = {
+    code: {"model": ClinicalWriteErrorResponse, "description": description}
+    for code, description in {
+        400: "Invalid action or malformed request",
+        401: "Missing or invalid identity",
+        403: "Permission denied or inactive account",
+        404: "Resource absent or not visible",
+        409: "State conflict, duplicate job or idempotency mismatch",
+        422: "Field or business validation failed",
+        429: "Rate limit exceeded",
+        500: "Unexpected failure with safe request_id",
+        503: "Rate limit or authentication store unavailable",
+    }.items()
+}
+_OCR_STATUS_PATTERN = r"^(queued|processing|ready_for_review|failed|draft_created)$"
+
+
+def _reject_unknown_query(request: Request, allowed: set[str]) -> None:
+    unknown = set(request.query_params) - allowed
+    if unknown:
+        raise ocr_service._error(
+            request,
+            422,
+            "VALIDATION_ERROR",
+            "Invalid request input.",
+            {"query": ["Unknown query parameter."]},
+        )
+
+
+@router.post(
+    "/patients/{patient_id}/prescription-ocr-jobs",
+    response_model=PrescriptionOcrJobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Start printed English prescription OCR",
+    description=(
+        "Patient: own record only. Starts an offline OCR job for an active, "
+        "patient-owned prescription document detected as PDF, JPEG or PNG. "
+        "Handwriting is unsupported. OCR output is untrusted and requires "
+        "patient review; it never verifies, issues or authorizes dispensing."
+    ),
+    dependencies=[Depends(require_upload_rate_limit)],
+    responses=_OCR_ERROR_RESPONSES,
+)
+async def create_prescription_ocr_job(
+    patient_id: UUID,
+    payload: PrescriptionOcrJobInput,
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    current_user: UserDep,
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=8, max_length=128)
+    ],
+) -> PrescriptionOcrJobRead:
+    _reject_unknown_query(request, set())
+    result = await ocr_service.create_job(
+        session=session,
+        user=current_user,
+        request=request,
+        patient_id=patient_id,
+        payload=payload,
+        idempotency_key=idempotency_key,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.get(
+    "/patients/{patient_id}/prescription-ocr-jobs",
+    response_model=PrescriptionOcrJobReadPage,
+    status_code=status.HTTP_200_OK,
+    summary="List own prescription OCR jobs",
+    description="Patient owner only. Filters by job status and supports bounded pagination.",
+    dependencies=[Depends(require_authenticated_rate_limit)],
+    responses=_OCR_ERROR_RESPONSES,
+)
+async def list_prescription_ocr_jobs(
+    patient_id: UUID,
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    current_user: UserDep,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    status_filter: Annotated[
+        str | None, Query(alias="status", pattern=_OCR_STATUS_PATTERN)
+    ] = None,
+) -> PrescriptionOcrJobReadPage:
+    _reject_unknown_query(request, {"page", "page_size", "status"})
+    result = await ocr_service.list_jobs(
+        session=session,
+        user=current_user,
+        request=request,
+        patient_id=patient_id,
+        page=page,
+        page_size=page_size,
+        status_filter=status_filter,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.get(
+    "/prescription-ocr-jobs/{job_id}",
+    response_model=PrescriptionOcrJobRead,
+    status_code=status.HTTP_200_OK,
+    summary="Read OCR state and extracted draft fields",
+    description="Only the owning patient can read job metadata or extracted fields.",
+    dependencies=[Depends(require_authenticated_rate_limit)],
+    responses=_OCR_ERROR_RESPONSES,
+)
+async def read_prescription_ocr_job(
+    job_id: UUID,
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    current_user: UserDep,
+) -> PrescriptionOcrJobRead:
+    _reject_unknown_query(request, set())
+    result = await ocr_service.read_job(
+        session=session, user=current_user, request=request, job_id=job_id
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post(
+    "/prescription-ocr-jobs/{job_id}/retry",
+    response_model=PrescriptionOcrJobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Retry a failed prescription OCR job",
+    description=(
+        "The owning patient can queue a failed job again while it is below the "
+        "configured total-attempt limit. The retained original file is reused."
+    ),
+    dependencies=[Depends(require_authenticated_rate_limit)],
+    responses=_OCR_ERROR_RESPONSES,
+)
+async def retry_prescription_ocr_job(
+    job_id: UUID,
+    payload: PrescriptionOcrRetryInput,
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    current_user: UserDep,
+) -> PrescriptionOcrJobRead:
+    _reject_unknown_query(request, set())
+    result = await ocr_service.retry_job(
+        session=session,
+        user=current_user,
+        request=request,
+        job_id=job_id,
+        payload=payload,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post(
+    "/patients/{patient_id}/prescription-ocr-jobs/{job_id}/draft",
+    response_model=PrescriptionOcrDraftCreated,
+    status_code=status.HTTP_201_CREATED,
+    summary="Save patient-reviewed OCR fields as a prescription draft",
+    description=(
+        "The owning patient submits reviewed/corrected fields for a review-ready "
+        "job. The resulting prescription remains patient-source and unconfirmed; "
+        "explicit patient confirmation remains a separate action."
+    ),
+    dependencies=[Depends(require_authenticated_rate_limit)],
+    responses=_OCR_ERROR_RESPONSES,
+)
+async def create_prescription_ocr_draft(
+    patient_id: UUID,
+    job_id: UUID,
+    payload: PrescriptionOcrDraftInput,
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    current_user: UserDep,
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=8, max_length=128)
+    ],
+) -> PrescriptionOcrDraftCreated:
+    _reject_unknown_query(request, set())
+    result = await ocr_service.create_reviewed_draft(
+        session=session,
+        user=current_user,
+        request=request,
+        patient_id=patient_id,
+        job_id=job_id,
+        payload=payload,
+        idempotency_key=idempotency_key,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return result
