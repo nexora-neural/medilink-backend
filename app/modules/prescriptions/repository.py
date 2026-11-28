@@ -262,6 +262,7 @@ async def cancel_superseded_medication(
     *,
     prescription_id: UUID,
     now: datetime,
+    refresh_clock: bool = False,
 ) -> tuple[int, int]:
     """Stop old schedules and cancel only future, unanswered occurrences.
 
@@ -287,6 +288,11 @@ async def cancel_superseded_medication(
 
     if not schedules:
         return 0, 0
+
+    # Lifecycle writers may have waited for a worker's schedule lock. Evaluate
+    # the future boundary after that wait so elapsed unanswered history remains.
+    if refresh_clock:
+        now = await session.scalar(select(func.clock_timestamp()))
 
     cancelled_schedules = 0
 

@@ -8,6 +8,8 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastapi import Request
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, select, text
@@ -58,7 +60,9 @@ class FhirExportsPostgresTests(IsolatedAsyncioTestCase):
             current_database = await session.scalar(text("SELECT current_database()"))
             self.assertEqual(current_database, EXPECTED_TEST_DATABASE)
             revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-            self.assertEqual(revision, "ml170_worker_fairness")
+            self.assertEqual(
+                revision, ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()
+            )
 
         self.patient_actor = None
         self.doctor_actor = None

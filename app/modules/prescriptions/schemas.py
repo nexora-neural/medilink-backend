@@ -165,6 +165,38 @@ class PrescriptionIssueContent(PrescriptionInput):
     items: list[PrescriptionIssueItemInput] = Field(min_length=1)
 
 
+class PrescriptionReasonInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def nonblank_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("A reason is required.")
+        return value
+
+
+class PrescriptionVersionInput(PrescriptionInput, PrescriptionReasonInput):
+    items: list[PrescriptionItemInput] = Field(min_length=1, max_length=100)
+
+
+class PrescriptionLifecycleRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    prescription_id: UUID
+    related_prescription_id: UUID | None
+    actor_user_id: UUID
+    action: str
+    reason: str
+    previous_status: str | None
+    status: str
+    previous_version: int
+    new_version: int
+    created_at: datetime
+
+
 class PrescriptionRecordRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -225,6 +257,7 @@ class PrescriptionDetail(BaseModel):
     prescription: PrescriptionRecordRead
     items: list[PrescriptionItemRead]
     reviews: list[PrescriptionReviewRead]
+    lifecycle_events: list[PrescriptionLifecycleRead] = Field(default_factory=list)
 
 
 class PrescriptionDetailPage(BaseModel):
