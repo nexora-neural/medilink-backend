@@ -236,6 +236,130 @@ class PrescriptionDetailPage(BaseModel):
     total: int
 
 
+class PrescriptionOcrJobInput(BaseModel):
+    """Start OCR for one already-uploaded, patient-owned prescription document."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    original_document_id: UUID
+
+
+class PrescriptionOcrItemFields(BaseModel):
+    """Untrusted OCR item suggestion; dose may be absent pending patient review."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    medicine_id: UUID | None = None
+    medicine_name_snapshot: str = Field(min_length=1, max_length=200)
+    dose_text: str | None = Field(default=None, max_length=200)
+    route: str | None = Field(default=None, max_length=100)
+    frequency: str = Field(min_length=1, max_length=200)
+    duration_days: int | None = Field(default=None, ge=1)
+    instructions: str | None = Field(default=None, max_length=2000)
+    quantity: Decimal | None = Field(
+        default=None,
+        gt=0,
+        max_digits=12,
+        decimal_places=3,
+    )
+    quantity_unit: Literal["tablet", "capsule", "mL"] | None = None
+    is_prn: bool
+
+
+class PrescriptionOcrFields(BaseModel):
+    """Untrusted OCR suggestions that always require patient review."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    claimed_prescriber: str | None = Field(default=None, max_length=200)
+    starts_on: date | None = None
+    ends_on: date | None = None
+    items: list[PrescriptionOcrItemFields] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def date_order(self):
+        if (
+            self.starts_on is not None
+            and self.ends_on is not None
+            and self.ends_on < self.starts_on
+        ):
+            raise ValueError("ends_on must be on or after starts_on.")
+        return self
+
+
+class PrescriptionOcrJobRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    patient_user_id: UUID
+    original_document_id: UUID
+    status: Literal["queued", "processing", "ready_for_review", "failed", "draft_created"]
+    extracted_fields: PrescriptionOcrFields | None = None
+    attempt_count: int
+    error_code: str | None = None
+    resulting_prescription_id: UUID | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PrescriptionOcrJobReadPage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[PrescriptionOcrJobRead]
+    page: int
+    page_size: int
+    total: int
+
+
+class PrescriptionOcrRetryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def clean_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not value or "\x00" in value:
+            raise ValueError("reason must contain non-blank text.")
+        return value
+
+
+class PrescriptionOcrDraftInput(BaseModel):
+    """Patient-confirmed/corrected field values used to create a draft only."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    claimed_prescriber: str | None = Field(default=None, max_length=200)
+    starts_on: date | None = None
+    ends_on: date | None = None
+    items: list[PrescriptionItemInput] = Field(min_length=1)
+
+    @field_validator("claimed_prescriber")
+    @classmethod
+    def clean_claimed_prescriber(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+    @model_validator(mode="after")
+    def date_order(self):
+        if (
+            self.starts_on is not None
+            and self.ends_on is not None
+            and self.ends_on < self.starts_on
+        ):
+            raise ValueError("ends_on must be on or after starts_on.")
+        return self
+
+
+class PrescriptionOcrDraftCreated(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job: PrescriptionOcrJobRead
+    prescription: PrescriptionDetail
+
+
 class ClinicalWriteErrorResponse(BaseModel):
     code: str
     message: str

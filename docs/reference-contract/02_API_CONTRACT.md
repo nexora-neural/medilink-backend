@@ -1692,7 +1692,24 @@ This response schema extends `IntegrationAdminSubmissionRead` with the idempoten
 | `claimed_prescriber` | string; nullable | No |
 | `starts_on` | string (date); nullable | No |
 | `ends_on` | string (date); nullable | No |
-| `items` | array<PrescriptionItemInput> | No |
+| `items` | array<PrescriptionOcrItemFields> | No |
+
+### PrescriptionOcrItemFields
+
+| Field | Type / validation | Required |
+|---|---|---|
+| `medicine_id` | string (uuid) | No |
+| `medicine_name_snapshot` | string; minLength=1; maxLength=200 | Yes |
+| `dose_text` | string; maxLength=200; nullable | No |
+| `route` | string; maxLength=100 | No |
+| `frequency` | string; minLength=1; maxLength=200 | Yes |
+| `duration_days` | integer; minimum=1 | No |
+| `instructions` | string; maxLength=2000 | No |
+| `quantity` | number; exclusiveMinimum=0 | No |
+| `quantity_unit` | tablet, capsule, mL | No |
+| `is_prn` | boolean | Yes |
+
+OCR dose is populated only from an explicit dose and unit in the directions, never from the product strength. If it is unclear or absent, return `null`; the patient must enter it during review before submitting the separate draft input, where `dose_text` remains required.
 
 ### PrescriptionOcrDraftInput
 

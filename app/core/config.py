@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     rate_limit_uploads_per_account_per_hour: int = Field(default=20, gt=0)
     rate_limit_integration_per_client_per_minute: int = Field(default=60, gt=0)
 
+    # ML-152 local/offline printed-prescription OCR worker configuration.
+    prescription_ocr_tesseract_cmd: str = "tesseract"
+    prescription_ocr_pdf_renderer_cmd: str = "pdftoppm"
+    prescription_ocr_timeout_seconds: int = Field(default=90, gt=0)
+    # Match the existing operations worker's total-attempt convention.
+    prescription_ocr_max_attempts: int = Field(default=3, gt=0)
+
     @field_validator("cors_origins")
     @classmethod
     def validate_cors_origins(cls, origins: list[str]) -> list[str]:
