@@ -65,8 +65,18 @@ class PrescriptionOcrParserTests(unittest.TestCase):
                 self.assertIsNone(result["items"][0]["dose_text"])
 
     def test_partially_matched_fractional_dose_is_left_for_patient_review(self):
+        instructions = (
+            "Take 1 tablet and a half once daily",
+            "Take 1 tablet and ½ once daily",
+        )
+        for instruction in instructions:
+            with self.subTest(instruction=instruction):
+                result = extract_fields(f"Amoxicillin 500 mg - {instruction}")
+                self.assertIsNone(result["items"][0]["dose_text"])
+
+    def test_negated_dose_instruction_is_left_for_patient_review(self):
         result = extract_fields(
-            "Amoxicillin 500 mg - Take 1 tablet and a half once daily"
+            "Amoxicillin 500 mg - Do not take 1 tablet once daily"
         )
 
         self.assertIsNone(result["items"][0]["dose_text"])
