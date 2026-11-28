@@ -12,7 +12,8 @@
   "authoredOn": "2026-11-28T08:30:00Z",
   "dosageInstruction": [
     {
-      "text": "Dose: 1 tablet; Route: oral; Frequency: twice daily; Duration: 5 days; Instructions: after meals"
+      "text": "Dose: 1 tablet; Route: oral; Frequency: twice daily; Duration: 5 days; Instructions: after meals",
+      "asNeededBoolean": false
     }
   ]
 }

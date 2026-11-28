@@ -177,6 +177,7 @@ class FhirExportsPostgresTests(IsolatedAsyncioTestCase):
                 frequency="twice daily",
                 duration_days=5,
                 instructions="after meals",
+                is_prn=(index == 0),
             )
             for index in range(item_count)
         ]
@@ -325,6 +326,7 @@ class FhirExportsPostgresTests(IsolatedAsyncioTestCase):
                 self.assertEqual(
                     resource["medicationCodeableConcept"]["text"], item.medicine_name_snapshot
                 )
+                self.assertEqual(resource["dosageInstruction"][0]["asNeededBoolean"], item.is_prn)
                 self.assertIn("Dose: 1 tablet", resource["dosageInstruction"][0]["text"])
                 self.assertNotIn("requester", resource)
         self.assertEqual(len(exported_ids), 6)

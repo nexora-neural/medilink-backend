@@ -1857,6 +1857,8 @@ This response schema extends `IntegrationAdminSubmissionRead` with the idempoten
 | `authoredOn` | string (date-time) | Yes |
 | `dosageInstruction` | array<object> | Yes |
 
+Each `dosageInstruction` has the required text summary and `asNeededBoolean` mapped from the stored prescription item's `is_prn` flag.
+
 ### IntegrationReportVersionUpload
 
 | Field | Type / validation | Required |

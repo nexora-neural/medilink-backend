@@ -207,5 +207,5 @@ async def export_medication_request(
         subject=FhirReference(reference=f"Patient/{patient.id}"),
         medicationCodeableConcept=FhirCodeableConcept(text=medicine_name),
         authoredOn=prescription.issued_at.astimezone(UTC),
-        dosageInstruction=[FhirDosage(text=_dosage_text(item))],
+        dosageInstruction=[FhirDosage(text=_dosage_text(item), asNeededBoolean=item.is_prn)],
     )

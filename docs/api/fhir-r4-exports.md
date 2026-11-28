@@ -26,7 +26,7 @@ Accept: application/fhir+json
 
 A patient can export only an item belonging to them. A verified doctor needs a current `prescriptions` grant for the item's patient. Patient-source and approved-external-system items return `404 RESOURCE_NOT_FOUND`, including patient-source prescriptions with an approved review outcome. The source field is authoritative; review state never converts a patient-source prescription into a doctor-issued prescription.
 
-Each doctor-issued prescription item is a separate `MedicationRequest`. The item UUID is its `id`; `subject.reference` is `Patient/{patient_uuid}`; `medicationCodeableConcept.text` is the stored medicine-name snapshot; `intent` is `order`; `authoredOn` is the prescription `issued_at`; and one `dosageInstruction.text` joins only the available dose, route, frequency, duration, and instruction values. No coded dose or other structured clinical value is inferred.
+Each doctor-issued prescription item is a separate `MedicationRequest`. The item UUID is its `id`; `subject.reference` is `Patient/{patient_uuid}`; `medicationCodeableConcept.text` is the stored medicine-name snapshot; `intent` is `order`; `authoredOn` is the prescription `issued_at`; and one `dosageInstruction.text` joins only the available dose, route, frequency, duration, and instruction values. The stored `is_prn` flag is exported as `dosageInstruction.asNeededBoolean` for both as-needed and scheduled items. No coded dose or other structured clinical value is inferred.
 
 Prescription statuses map as follows:
 

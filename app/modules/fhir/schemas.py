@@ -29,6 +29,7 @@ class FhirCodeableConcept(FhirElement):
 
 class FhirDosage(FhirElement):
     text: str = Field(min_length=1)
+    asNeededBoolean: bool
 
 
 class FhirPatient(FhirElement):

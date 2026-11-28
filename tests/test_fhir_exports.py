@@ -1,6 +1,8 @@
 """Contract and mapping tests for the limited FHIR R4 exports."""
 
+import json
 from datetime import UTC, date, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock, patch
@@ -55,6 +57,14 @@ class FhirExportContractTests(TestCase):
             medication["responses"]["200"]["content"]["application/fhir+json"]["schema"]["$ref"],
             "#/components/schemas/FhirMedicationRequest",
         )
+        dosage_schema = schema["components"]["schemas"]["FhirDosage"]
+        self.assertEqual(dosage_schema["properties"]["asNeededBoolean"]["type"], "boolean")
+        self.assertIn("asNeededBoolean", dosage_schema["required"])
+        contract_path = (
+            Path(__file__).resolve().parents[1] / "docs/reference-contract/03_OPENAPI.json"
+        )
+        checked_in = json.loads(contract_path.read_text())["components"]["schemas"]["FhirDosage"]
+        self.assertEqual(checked_in, dosage_schema)
         error_schema = patient["responses"]["404"]["content"]["application/json"]["schema"]
         self.assertEqual(error_schema["properties"]["code"]["type"], "string")
         self.assertNotIn("application/fhir+json", patient["responses"]["404"]["content"])
@@ -286,6 +296,7 @@ class FhirExportMappingTests(IsolatedAsyncioTestCase):
             frequency="twice daily",
             duration_days=5,
             instructions="after meals",
+            is_prn=False,
         )
         status_map = {
             "active": "active",
@@ -330,7 +341,46 @@ class FhirExportMappingTests(IsolatedAsyncioTestCase):
                     "Dose: 1 tablet; Route: oral; Frequency: twice daily; "
                     "Duration: 5 days; Instructions: after meals",
                 )
+                self.assertFalse(resource.dosageInstruction[0].asNeededBoolean)
                 self.assertNotIn("requester", resource.model_dump())
+
+    async def test_prn_item_maps_to_fhir_as_needed_boolean(self):
+        item = SimpleNamespace(
+            id=uuid4(),
+            medicine_name_snapshot="Synthetic as-needed medicine",
+            dose_text="1 tablet",
+            route="oral",
+            frequency="as needed",
+            duration_days=None,
+            instructions=None,
+            is_prn=True,
+        )
+        prescription = SimpleNamespace(
+            source="doctor",
+            patient_user_id=self.patient_id,
+            status="active",
+            issued_at=datetime(2026, 11, 28, 8, 30, tzinfo=UTC),
+        )
+        with (
+            patch.object(
+                service.repository,
+                "get_medication_item",
+                new_callable=AsyncMock,
+                return_value=(item, prescription, self.patient, self.profile),
+            ),
+            patch.object(
+                service.repository,
+                "get_active_role_codes",
+                new_callable=AsyncMock,
+                return_value={"patient"},
+            ),
+        ):
+            resource = await service.export_medication_request(
+                session=object(), user=self.patient_actor, item_id=item.id
+            )
+
+        self.assertTrue(resource.dosageInstruction[0].asNeededBoolean)
+        self.assertTrue(resource.model_dump()["dosageInstruction"][0]["asNeededBoolean"])
 
     async def test_reviewed_patient_source_is_hidden_and_draft_is_rejected(self):
         item = SimpleNamespace(
