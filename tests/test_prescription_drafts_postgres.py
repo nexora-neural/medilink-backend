@@ -1,6 +1,7 @@
 """Real PostgreSQL checks for prescription draft persistence."""
 
 import os
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, skipUnless
@@ -167,6 +168,132 @@ class PrescriptionDraftPostgresTests(IsolatedAsyncioTestCase):
             source="patient",
             payload=self.payload(),
         )
+
+    @asynccontextmanager
+    async def prescription_client(self, actor):
+        app = FastAPI()
+        app.include_router(router, prefix="/api/v1")
+
+        async def test_session():
+            yield self.db
+
+        async def test_user():
+            return actor
+
+        app.dependency_overrides[get_session] = test_session
+        app.dependency_overrides[get_current_user] = test_user
+
+        @app.middleware("http")
+        async def request_id_middleware(request, call_next):
+            request.state.request_id = str(uuid4())
+            return await call_next(request)
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            yield client
+
+    async def create_doctor_draft_for_authorization(self):
+        return await service.create_draft(
+            session=self.db,
+            user=self.doctor,
+            request=self.request,
+            patient_id=self.patient_id,
+            payload=self.payload().model_copy(
+                update={"consultation_id": self.consultation.id}
+            ),
+        )
+
+    async def create_authorization_actor(self, role_code):
+        actor = User(
+            firebase_uid=str(uuid4()),
+            display_name=f"Synthetic unrelated {role_code}",
+            status="active",
+        )
+        self.db.add(actor)
+        await self.db.flush()
+        role_id = await self.db.scalar(select(Role.id).where(Role.code == role_code))
+        self.db.add(UserRole(user_id=actor.id, role_id=role_id))
+        if role_code == "doctor":
+            self.db.add(
+                ProfessionalProfile(
+                    user_id=actor.id,
+                    role="doctor",
+                    doctor_reference=f"TEST-{uuid4()}",
+                    verification_status="approved",
+                )
+            )
+        await self.db.commit()
+        return actor
+
+    def assert_access_denied(self, response):
+        self.assertEqual(response.status_code, 403, response.text)
+        self.assertEqual(response.json()["detail"]["code"], "ACCESS_DENIED")
+
+    async def denied_draft_edit(self, client, draft):
+        body = self.payload().model_dump(mode="json")
+        body["consultation_id"] = str(draft.consultation_id)
+        body["items"][0]["instructions"] = "Synthetic replacement instructions."
+        response = await client.put(
+            f"/api/v1/prescriptions/{draft.id}/draft",
+            json=body,
+            headers={"If-Match": str(draft.version)},
+        )
+        self.assert_access_denied(response)
+
+    async def test_non_owner_doctor_without_grant_cannot_view_or_edit_draft(self):
+        draft = (await self.create_doctor_draft_for_authorization()).prescription
+        actor = await self.create_authorization_actor("doctor")
+
+        async with self.prescription_client(actor) as client:
+            response = await client.get(f"/api/v1/prescriptions/{draft.id}")
+            self.assert_access_denied(response)
+            await self.denied_draft_edit(client, draft)
+
+    async def test_unrelated_signed_in_patient_cannot_view_or_edit_doctor_draft(self):
+        draft = (await self.create_doctor_draft_for_authorization()).prescription
+        actor = await self.create_authorization_actor("patient")
+
+        async with self.prescription_client(actor) as client:
+            response = await client.get(f"/api/v1/prescriptions/{draft.id}")
+            self.assert_access_denied(response)
+            await self.denied_draft_edit(client, draft)
+
+    async def test_denied_non_owner_edit_preserves_stored_version_and_items(self):
+        draft = (await self.create_doctor_draft_for_authorization()).prescription
+        actor = await self.create_authorization_actor("doctor")
+        grant = AccessGrant(
+            patient_user_id=self.patient_id,
+            professional_user_id=actor.id,
+            allow_consultation=True,
+            status="active",
+            starts_at=self.grant.starts_at,
+            expires_at=self.grant.expires_at,
+        )
+        self.db.add(grant)
+        await self.db.flush()
+        self.db.add(GrantCategory(grant_id=grant.id, category="prescriptions"))
+        await self.db.commit()
+
+        draft_id = draft.id
+        items = PrescriptionItem.__table__
+        item_query = select(items).where(items.c.prescription_id == draft_id).order_by(items.c.id)
+        version_query = select(Prescription.version).where(Prescription.id == draft_id)
+        original_version = (await self.db.execute(version_query)).scalar_one()
+        original_items = (await self.db.execute(item_query)).mappings().all()
+        self.assertEqual(len(original_items), 1)
+
+        async with self.prescription_client(actor) as client:
+            # A valid grant allows reading the draft, while editing requires ownership.
+            response = await client.get(f"/api/v1/prescriptions/{draft_id}")
+            self.assertEqual(response.status_code, 200, response.text)
+            await self.denied_draft_edit(client, draft)
+
+        # Select columns directly to read persisted values outside the ORM identity map.
+        stored_version = (await self.db.execute(version_query)).scalar_one()
+        stored_items = (await self.db.execute(item_query)).mappings().all()
+        self.assertEqual(stored_version, original_version)
+        self.assertEqual(stored_items, original_items)
 
     async def test_create_persists_draft_and_items(self):
         draft = await self.create_draft()
