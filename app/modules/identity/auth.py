@@ -15,7 +15,11 @@ from app.core.config import settings
 from app.database.session import get_session
 from app.modules.identity.models import User
 
-bearer = HTTPBearer(auto_error=False)
+bearer = HTTPBearer(
+    auto_error=False,
+    scheme_name="FirebaseBearer",
+    description="Firebase ID token verified by the MediLink backend.",
+)
 
 
 class AuthenticationError(HTTPException):

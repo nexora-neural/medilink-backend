@@ -7,7 +7,6 @@ from app.modules.consent.router import router as consent_router
 from app.modules.consultations.router import router as consultations_router
 from app.modules.dispensing.router import router as dispensing_router
 from app.modules.documents.router import router as documents_router
-from app.modules.fhir.router import router as fhir_router
 from app.modules.identity.router import router as identity_router
 from app.modules.integrations.report_router import router as integration_reports_router
 from app.modules.integrations.router import router as integrations_router
@@ -48,7 +47,6 @@ for module_router in (
     operations_router,
     integrations_router,
     integration_reports_router,
-    fhir_router,
     laboratory_router,
     doctor_qr_router,
 ):

@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
@@ -23,6 +23,8 @@ from app.modules.documents.errors import (
     DocumentError,
     document_error_handler,
 )
+from app.modules.fhir.router import router as fhir_router
+from app.modules.fhir.service import FhirExportError
 from app.modules.identity.auth import AuthenticationError
 
 logger = logging.getLogger(__name__)
@@ -79,17 +81,17 @@ async def assign_request_id(request: Request, call_next):
     if response.status_code >= 400:
         response.headers["Cache-Control"] = "no-store"
     api_prefix = settings.api_v1_prefix.rstrip("/") + "/"
-    if request.url.path.startswith(api_prefix) and not request.url.path.endswith(
-        ("/health", "/health/database")
-    ):
+    is_versioned_api_request = request.url.path.startswith(
+        api_prefix
+    ) and not request.url.path.endswith(("/health", "/health/database"))
+    is_fhir_export_request = request.url.path.startswith("/fhir/r4/")
+    if is_versioned_api_request or is_fhir_export_request:
         await record_api_request(request, response)
     return response
 
 
 @app.exception_handler(AuthenticationError)
-async def authentication_error_handler(
-    request: Request, exc: AuthenticationError
-):
+async def authentication_error_handler(request: Request, exc: AuthenticationError):
     return JSONResponse(
         status_code=exc.status_code,
         content=exc.detail,
@@ -97,10 +99,22 @@ async def authentication_error_handler(
     )
 
 
+@app.exception_handler(FhirExportError)
+async def fhir_export_error_handler(request: Request, exc: FhirExportError) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "code": exc.code,
+            "message": exc.message,
+            "field_errors": {},
+            "request_id": request.state.request_id,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.exception_handler(RequestValidationError)
-async def validation_error_handler(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Return fixed messages using declared body, query and path field names."""
     route = request.scope.get("route")
     body_field = getattr(route, "body_field", None)
@@ -169,6 +183,7 @@ app.include_router(
     api_router,
     prefix=settings.api_v1_prefix,
 )
+app.include_router(fhir_router)
 
 
 @app.get("/health", tags=["health"])

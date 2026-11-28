@@ -16173,8 +16173,8 @@
         "tags": [
           "FHIR export"
         ],
-        "summary": "Export limited R4 Patient",
-        "description": "Allowed actor: Patient: own record or Verified Doctor: current category grant; clinical writes also require patient-approved consultation. Doctor needs history_allergies grant; patient identity reference only. Mapping/profile validation remains implementation gate.",
+        "summary": "Export a limited FHIR R4 (4.0.1) Patient",
+        "description": "Allowed actor: patient reading their own record or verified doctor with a current history_allergies grant. Returns only identity fields: internal UUID id, urn:medilink:patient identifier, authorized display name, and birthDate when available. Successful responses use application/fhir+json; inaccessible resources are concealed. FHIR search, write operations, and full server conformance are not supported.",
         "security": [
           {
             "FirebaseBearer": []
@@ -16212,7 +16212,7 @@
             }
           },
           "403": {
-            "description": "Permission denied or inactive verification/account/organization",
+            "description": "The account is inactive or the doctor is not verified.",
             "content": {
               "application/json": {
                 "schema": {
@@ -16222,7 +16222,7 @@
             }
           },
           "404": {
-            "description": "Resource absent or not visible",
+            "description": "The resource is absent or concealed by ownership, grant, or organization access.",
             "content": {
               "application/json": {
                 "schema": {
@@ -16270,9 +16270,19 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Authentication or request-limit service is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
-        "x-allowed-actors": "Patient: own record or Verified Doctor: current category grant; clinical writes also require patient-approved consultation",
+        "x-allowed-actors": "Patient: own resource or verified doctor: current history_allergies grant",
         "parameters": [
           {
             "name": "patient_id",
@@ -16292,8 +16302,8 @@
         "tags": [
           "FHIR export"
         ],
-        "summary": "Export doctor-issued medication item",
-        "description": "Allowed actor: Patient: own record or Verified Doctor: current category grant; clinical writes also require patient-approved consultation. prescriptions category. One resource per item; source=doctor only. Patient-source returns 404. requester omitted until Practitioner export supported; map patient reference to exported Patient. Superseded item maps cancelled; discontinued maps stopped.",
+        "summary": "Export one doctor-issued FHIR R4 (4.0.1) MedicationRequest",
+        "description": "Allowed actor: patient reading their own item or verified doctor with a current prescriptions grant. One resource per doctor-issued item; patient-source and external-system items return 404 even if reviewed. Draft or missing issued_at returns 409. Maps active to active, completed to completed, discontinued to stopped, cancelled and superseded to cancelled. The subject references Patient/{patient_uuid}; requester is omitted until Practitioner export is supported. Successful responses use application/fhir+json; FHIR search, write operations, Bundles, SMART authentication, and full server conformance are not supported.",
         "security": [
           {
             "FirebaseBearer": []
@@ -16331,7 +16341,7 @@
             }
           },
           "403": {
-            "description": "Permission denied or inactive verification/account/organization",
+            "description": "The account is inactive or the doctor is not verified.",
             "content": {
               "application/json": {
                 "schema": {
@@ -16341,7 +16351,7 @@
             }
           },
           "404": {
-            "description": "Resource absent or not visible",
+            "description": "The resource is absent or concealed by ownership, grant, or organization access.",
             "content": {
               "application/json": {
                 "schema": {
@@ -16389,9 +16399,19 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Authentication or request-limit service is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
-        "x-allowed-actors": "Patient: own record or Verified Doctor: current category grant; clinical writes also require patient-approved consultation",
+        "x-allowed-actors": "Patient: own item or verified doctor: current prescriptions grant",
         "parameters": [
           {
             "name": "item_id",
@@ -17093,7 +17113,8 @@
       "FirebaseBearer": {
         "type": "http",
         "scheme": "bearer",
-        "bearerFormat": "Firebase ID token"
+        "bearerFormat": "Firebase ID token",
+        "description": "Firebase ID token verified by the MediLink backend."
       },
       "IntegrationKey": {
         "type": "apiKey",
@@ -22076,74 +22097,71 @@
         ]
       },
       "FhirPatient": {
-        "type": "object",
-        "additionalProperties": false,
         "properties": {
           "resourceType": {
             "type": "string",
-            "enum": [
-              "Patient"
-            ]
+            "const": "Patient",
+            "title": "Resourcetype"
           },
           "id": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9.\\-]+$",
+            "title": "Id"
           },
           "identifier": {
-            "type": "array",
             "items": {
-              "type": "object",
-              "properties": {
-                "system": {
-                  "type": "string"
-                },
-                "value": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "system",
-                "value"
-              ]
-            }
+              "$ref": "#/components/schemas/FhirIdentifier"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Identifier"
           },
           "name": {
-            "type": "array",
             "items": {
-              "type": "object",
-              "properties": {
-                "text": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "text"
-              ]
-            }
+              "$ref": "#/components/schemas/FhirHumanName"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Name"
           },
           "birthDate": {
-            "type": "string",
-            "format": "date"
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Birthdate"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "resourceType",
           "id",
           "identifier",
           "name"
-        ]
+        ],
+        "title": "FhirPatient"
       },
       "FhirMedicationRequest": {
-        "type": "object",
-        "additionalProperties": false,
         "properties": {
           "resourceType": {
             "type": "string",
-            "enum": [
-              "MedicationRequest"
-            ]
+            "const": "MedicationRequest",
+            "title": "Resourcetype"
           },
           "id": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9.\\-]+$",
+            "title": "Id"
           },
           "status": {
             "type": "string",
@@ -22154,55 +22172,36 @@
               "cancelled",
               "draft",
               "entered-in-error"
-            ]
+            ],
+            "title": "Status"
           },
           "intent": {
             "type": "string",
-            "enum": [
-              "order"
-            ]
+            "const": "order",
+            "title": "Intent"
           },
           "subject": {
-            "type": "object",
-            "properties": {
-              "reference": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "reference"
-            ]
+            "$ref": "#/components/schemas/FhirReference"
           },
           "medicationCodeableConcept": {
-            "type": "object",
-            "properties": {
-              "text": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "text"
-            ]
+            "$ref": "#/components/schemas/FhirCodeableConcept"
           },
           "authoredOn": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "title": "Authoredon"
           },
           "dosageInstruction": {
-            "type": "array",
             "items": {
-              "type": "object",
-              "properties": {
-                "text": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "text"
-              ]
-            }
+              "$ref": "#/components/schemas/FhirDosage"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Dosageinstruction"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "resourceType",
           "id",
@@ -22212,7 +22211,8 @@
           "medicationCodeableConcept",
           "authoredOn",
           "dosageInstruction"
-        ]
+        ],
+        "title": "FhirMedicationRequest"
       },
       "IntegrationReportVersionUpload": {
         "type": "object",
@@ -23407,6 +23407,87 @@
             "minimum": 0
           }
         }
+      },
+      "FhirCodeableConcept": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "FhirCodeableConcept"
+      },
+      "FhirDosage": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "FhirDosage"
+      },
+      "FhirHumanName": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "FhirHumanName"
+      },
+      "FhirIdentifier": {
+        "properties": {
+          "system": {
+            "type": "string",
+            "minLength": 1,
+            "title": "System"
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Value"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "system",
+          "value"
+        ],
+        "title": "FhirIdentifier"
+      },
+      "FhirReference": {
+        "properties": {
+          "reference": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reference"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reference"
+        ],
+        "title": "FhirReference"
       }
     }
   }
