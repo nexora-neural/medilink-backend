@@ -23,6 +23,19 @@ from app.modules.documents import storage
 
 MAX_RENDERED_DIMENSION = 2480
 _STRENGTH = r"\d+(?:\.\d+)?\s*(?:mg|mcg|µg|g|ml|mL|units?)"
+_DOSE_AMOUNT = (
+    r"(?:\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?"
+    r"|a|an|one|two|three|four|five|six|half(?:\s+a)?|quarter)"
+)
+_DOSE_UNIT = (
+    r"(?:tablets?|capsules?|pills?|caplets?|patches?|puffs?|drops?|"
+    r"suppositories?|lozenges?|mL|ml|mg|mcg|µg|g|units?)"
+)
+_DOSE_DIRECTIVE = re.compile(
+    rf"\b(?:take|use|apply|inject|inhale|instill|insert)\s+"
+    rf"(?P<dose>{_DOSE_AMOUNT}\s+{_DOSE_UNIT})\b",
+    re.IGNORECASE,
+)
 _PRESCRIBER = re.compile(r"(?im)^\s*(?:prescriber|doctor)\s*:\s*(?:dr\.?\s*)?(.+?)\s*$")
 _DOCTOR_LINE = re.compile(r"(?im)^\s*dr\.?\s+([A-Z][A-Za-z .'-]{1,120})\s*$")
 _ITEM_LINE = re.compile(
@@ -195,6 +208,8 @@ def extract_fields(recognized_text: str) -> dict:
         if frequency_match is None:
             continue
         frequency = re.sub(r"\s+", " ", frequency_match.group(0)).strip()
+        dose_match = _DOSE_DIRECTIVE.search(directions)
+        dose = re.sub(r"\s+", " ", dose_match.group("dose")).strip() if dose_match else None
         duration_match = _DURATION.search(directions)
         duration = int(duration_match.group(1)) if duration_match else None
         if duration is not None and duration < 1:
@@ -204,7 +219,10 @@ def extract_fields(recognized_text: str) -> dict:
         items.append(
             {
                 "medicine_name_snapshot": re.sub(r"\s+", " ", match.group("name")).strip()[:200],
-                "dose_text": re.sub(r"\s+", " ", match.group("strength")).strip()[:200],
+                # Product strength and administered dose are different values.
+                # Never fill the dose from strength; null asks the patient to
+                # enter it during the required review step.
+                "dose_text": dose[:200] if dose else None,
                 "route": route,
                 "frequency": frequency[:200],
                 "duration_days": duration,

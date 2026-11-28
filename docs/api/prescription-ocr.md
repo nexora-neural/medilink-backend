@@ -27,7 +27,9 @@ The retry endpoint only accepts failed jobs. A repeated retry while the job is q
 
 ## OCR engine and operations
 
-The implementation uses local Tesseract OCR with the English (`eng`) language data. PDF pages are rendered locally with Poppler `pdftoppm`. Neither document bytes nor extracted text are sent to an external provider. Raw OCR text is held in worker memory only and is not returned or persisted; the API stores only the contract's structured suggestion fields. The parser conservatively recognizes labeled prescriber/date lines and printed medicine lines containing a strength and recognizable frequency. Unrecognized fields are omitted for the patient to fill or correct.
+The implementation uses local Tesseract OCR with the English (`eng`) language data. PDF pages are rendered locally with Poppler `pdftoppm`. Neither document bytes nor extracted text are sent to an external provider. Raw OCR text is held in worker memory only and is not returned or persisted; the API stores only structured suggestion fields. The parser conservatively recognizes labeled prescriber/date lines and printed medicine lines containing a strength and recognizable frequency. A dose is populated only when an explicit dose and unit appear in the directions (for example, “Take 2 capsules”); product strength is never substituted for dose. An unclear or unstated dose is returned as `null` so the patient must enter it during review. Other unrecognized fields are omitted for the patient to fill or correct.
+
+Worker completion is conditional on both the job still being in `processing` and the attempt count still matching the worker's claimed attempt. If stale-job recovery has requeued the job and another worker has claimed a newer attempt, the older worker discards its result without changing the job or recording a completion audit event.
 
 Install the system tools on macOS with:
 

@@ -18,6 +18,7 @@ from app.modules.identity.request_limits import (
 from app.modules.prescriptions import ocr_service
 from app.modules.prescriptions.schemas import (
     PrescriptionOcrDraftCreated,
+    PrescriptionOcrFields,
     PrescriptionOcrJobRead,
     PrescriptionOcrJobReadPage,
 )
@@ -158,12 +159,23 @@ class PrescriptionOcrApiContractTests(TestCase):
                 },
             }
         )
+        ocr_read = self.job_read(status="ready_for_review")
+        ocr_read.extracted_fields = PrescriptionOcrFields(
+            items=[
+                {
+                    "medicine_name_snapshot": "Amoxicillin",
+                    "dose_text": None,
+                    "frequency": "three times a day",
+                    "is_prn": False,
+                }
+            ]
+        )
         with (
             patch.object(
                 ocr_service,
                 "read_job",
                 new_callable=AsyncMock,
-                return_value=self.job_read(status="ready_for_review"),
+                return_value=ocr_read,
             ),
             patch.object(
                 ocr_service,
@@ -193,6 +205,7 @@ class PrescriptionOcrApiContractTests(TestCase):
 
         self.assertEqual(read.status_code, 200, read.text)
         self.assertEqual(read.json()["status"], "ready_for_review")
+        self.assertIsNone(read.json()["extracted_fields"]["items"][0]["dose_text"])
         self.assertEqual(retry.status_code, 202, retry.text)
         self.assertEqual(draft_response.status_code, 201, draft_response.text)
         self.assertEqual(draft_response.json()["prescription"]["prescription"]["source"], "patient")
@@ -231,3 +244,9 @@ class PrescriptionOcrApiContractTests(TestCase):
             self.assertTrue(
                 any(item["name"] == "Idempotency-Key" and item["required"] for item in params)
             )
+        ocr_item = spec["components"]["schemas"]["PrescriptionOcrItemFields"]
+        self.assertIn(
+            {"type": "null"},
+            ocr_item["properties"]["dose_text"]["anyOf"],
+        )
+        self.assertNotIn("dose_text", ocr_item["required"])

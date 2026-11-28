@@ -130,6 +130,7 @@ async def process_one_ocr_job(session: AsyncSession) -> bool:
         )
         job.status = "processing"
         job.attempt_count += 1
+        claimed_attempt_count = job.attempt_count
         job.error_code = None
         job.updated_at = datetime.now(UTC)
         await _record_attempt(
@@ -166,7 +167,11 @@ async def process_one_ocr_job(session: AsyncSession) -> bool:
             .with_for_update()
             .execution_options(populate_existing=True)
         )
-        if current is None or current.status != "processing":
+        if (
+            current is None
+            or current.status != "processing"
+            or current.attempt_count != claimed_attempt_count
+        ):
             await session.rollback()
             return True
 

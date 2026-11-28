@@ -82,8 +82,23 @@ class PrescriptionOcrRealEngineTests(unittest.TestCase):
                 self.assertEqual(fields["starts_on"], "2026-11-28")
                 self.assertEqual(fields["ends_on"], "2026-12-02")
                 self.assertEqual(fields["items"][0]["medicine_name_snapshot"], "Amoxicillin")
+                self.assertEqual(fields["items"][0]["dose_text"], "1 capsule")
                 self.assertEqual(fields["items"][0]["frequency"], "three times a day")
                 self.assertNotIn("raw_text", fields)
+
+    def test_dose_comes_from_directions_not_product_strength(self):
+        result = extract_fields(
+            "Amoxicillin 500 mg - Take 2 capsules three times a day for 5 days"
+        )
+
+        self.assertEqual(result["items"][0]["dose_text"], "2 capsules")
+
+    def test_unclear_dose_is_left_for_patient_review(self):
+        result = extract_fields(
+            "Amoxicillin 500 mg - Take as directed three times a day for 5 days"
+        )
+
+        self.assertIsNone(result["items"][0]["dose_text"])
 
     def test_unavailable_engine_returns_a_stable_safe_code(self):
         key, size = self.save_as_private_document("png", "image/png")

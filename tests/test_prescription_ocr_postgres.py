@@ -7,11 +7,12 @@ import unittest
 from asyncio import Event, create_task, gather, sleep
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
 from httpx import ASGITransport, AsyncClient
 from PIL import Image, ImageDraw, ImageFont
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.config import settings
@@ -365,6 +366,56 @@ class PrescriptionOcrPostgresWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             all("patient data" not in str(event.metadata_) for event in events)
         )
+
+    async def test_stale_worker_cannot_overwrite_a_newer_processing_attempt(self):
+        jobs_url = f"/api/v1/patients/{self.patient_id}/prescription-ocr-jobs"
+        created = await self.client.post(
+            jobs_url,
+            json={"original_document_id": str(self.document_id)},
+            headers={"Idempotency-Key": "ml152-stale-attempt-create"},
+        )
+        self.assertEqual(created.status_code, 202, created.text)
+        job_id = created.json()["id"]
+
+        async def newer_attempt_claimed(*args, **kwargs):
+            # The first worker has already committed attempt 1 as processing.
+            # Model recovery/reclaim completing while its OCR call is still in
+            # flight, leaving attempt 2 as the current processing owner.
+            await self.db.execute(
+                update(PrescriptionOcrJobModel)
+                .where(PrescriptionOcrJobModel.id == job_id)
+                .values(status="processing", attempt_count=2, extracted_fields=None)
+            )
+            await self.db.commit()
+            return {
+                "claimed_prescriber": None,
+                "starts_on": None,
+                "ends_on": None,
+                "items": [],
+            }
+
+        with patch(
+            "app.modules.prescriptions.ocr_worker.run_in_threadpool",
+            side_effect=newer_attempt_claimed,
+        ):
+            self.assertTrue(await process_one_ocr_job(self.db))
+
+        current = await self.db.scalar(
+            select(PrescriptionOcrJobModel)
+            .where(PrescriptionOcrJobModel.id == job_id)
+            .execution_options(populate_existing=True)
+        )
+        self.assertEqual(current.status, "processing")
+        self.assertEqual(current.attempt_count, 2)
+        self.assertIsNone(current.extracted_fields)
+        completions = await self.db.scalars(
+            select(AuditEvent).where(
+                AuditEvent.target_type == "prescription_ocr_jobs",
+                AuditEvent.target_id == job_id,
+                AuditEvent.action == "prescription.ocr_job.attempt.completed",
+            )
+        )
+        self.assertEqual(list(completions.all()), [])
 
     async def test_concurrent_same_key_requests_replay_one_saved_response(self):
         actor_id = uuid4()

@@ -21579,6 +21579,63 @@
           "updated_at"
         ]
       },
+      "PrescriptionOcrItemFields": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "medicine_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "medicine_name_snapshot": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "dose_text": {
+            "type": "string",
+            "maxLength": 200,
+            "nullable": true
+          },
+          "route": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "frequency": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "duration_days": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "instructions": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "quantity": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "quantity_unit": {
+            "type": "string",
+            "enum": [
+              "tablet",
+              "capsule",
+              "mL"
+            ]
+          },
+          "is_prn": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "medicine_name_snapshot",
+          "frequency",
+          "is_prn"
+        ]
+      },
       "PrescriptionOcrFields": {
         "type": "object",
         "additionalProperties": false,
@@ -21600,7 +21657,7 @@
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/PrescriptionItemInput"
+              "$ref": "#/components/schemas/PrescriptionOcrItemFields"
             }
           }
         }

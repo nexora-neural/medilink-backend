@@ -244,6 +244,28 @@ class PrescriptionOcrJobInput(BaseModel):
     original_document_id: UUID
 
 
+class PrescriptionOcrItemFields(BaseModel):
+    """Untrusted OCR item suggestion; dose may be absent pending patient review."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    medicine_id: UUID | None = None
+    medicine_name_snapshot: str = Field(min_length=1, max_length=200)
+    dose_text: str | None = Field(default=None, max_length=200)
+    route: str | None = Field(default=None, max_length=100)
+    frequency: str = Field(min_length=1, max_length=200)
+    duration_days: int | None = Field(default=None, ge=1)
+    instructions: str | None = Field(default=None, max_length=2000)
+    quantity: Decimal | None = Field(
+        default=None,
+        gt=0,
+        max_digits=12,
+        decimal_places=3,
+    )
+    quantity_unit: Literal["tablet", "capsule", "mL"] | None = None
+    is_prn: bool
+
+
 class PrescriptionOcrFields(BaseModel):
     """Untrusted OCR suggestions that always require patient review."""
 
@@ -252,7 +274,7 @@ class PrescriptionOcrFields(BaseModel):
     claimed_prescriber: str | None = Field(default=None, max_length=200)
     starts_on: date | None = None
     ends_on: date | None = None
-    items: list[PrescriptionItemInput] = Field(default_factory=list)
+    items: list[PrescriptionOcrItemFields] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def date_order(self):
