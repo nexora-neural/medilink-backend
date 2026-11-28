@@ -420,8 +420,8 @@ Path identifiers are UUIDs. `Idempotency-Key` marked **required** is a request h
 | `GET /fhir/r4/Patient/{patient_id}` | Export limited R4 Patient | Patient: own record or Verified Doctor: current category grant; clinical writes also require patient-approved consultation | No body → FhirPatient (200) |
 | `GET /fhir/r4/MedicationRequest/{item_id}` | Export doctor-issued medication item | Patient: own record or Verified Doctor: current category grant; clinical writes also require patient-approved consultation | No body → FhirMedicationRequest (200) |
 
-- `GET /fhir/r4/Patient/{patient_id}`: Doctor needs history_allergies grant; patient identity reference only. Mapping/profile validation remains implementation gate.
-- `GET /fhir/r4/MedicationRequest/{item_id}`: prescriptions category. One resource per item; source=doctor only. Patient-source returns 404. requester omitted until Practitioner export supported; map patient reference to exported Patient. Superseded item maps cancelled; discontinued maps stopped.
+- `GET /fhir/r4/Patient/{patient_id}`: FHIR R4 (4.0.1) Patient identity fields only. Doctor needs a current history_allergies grant. The patient UUID is both the resource ID and the `urn:medilink:patient` identifier value; the authorized display name is returned and birthDate is included when available. Successful responses use `application/fhir+json`.
+- `GET /fhir/r4/MedicationRequest/{item_id}`: FHIR R4 (4.0.1) prescriptions category. One resource per doctor-issued item; patient-source and external-system items return 404 even if reviewed. requester is omitted until Practitioner export is supported; subject references the exported Patient. Active/completed/discontinued/cancelled/superseded map to active/completed/stopped/cancelled/cancelled. Draft or missing issued_at is rejected with 409. Successful responses use `application/fhir+json`.
 
 ## 7. Concrete request examples
 
@@ -1856,6 +1856,8 @@ This response schema extends `IntegrationAdminSubmissionRead` with the idempoten
 | `medicationCodeableConcept` | object | Yes |
 | `authoredOn` | string (date-time) | Yes |
 | `dosageInstruction` | array<object> | Yes |
+
+Each `dosageInstruction` has the required text summary and `asNeededBoolean` mapped from the stored prescription item's `is_prn` flag.
 
 ### IntegrationReportVersionUpload
 

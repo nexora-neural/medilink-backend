@@ -1,0 +1,16 @@
+{
+  "resourceType": "Patient",
+  "id": "00000000-0000-4000-8000-000000000022",
+  "identifier": [
+    {
+      "system": "urn:medilink:patient",
+      "value": "00000000-0000-4000-8000-000000000022"
+    }
+  ],
+  "name": [
+    {
+      "text": "Synthetic ML-151 Patient"
+    }
+  ],
+  "birthDate": "1990-01-02"
+}
