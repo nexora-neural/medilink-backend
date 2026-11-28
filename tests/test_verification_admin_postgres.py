@@ -1,6 +1,8 @@
 """ML-48 integration checks against a separately provisioned PostgreSQL database."""
 
 import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, skipUnless
 from unittest.mock import AsyncMock, patch
@@ -21,7 +23,11 @@ from app.modules.identity.request_limits import require_authenticated_rate_limit
 from app.modules.organizations.models import Organization
 from app.modules.profiles.models import ProfessionalProfile
 from app.modules.verification import service
-from app.modules.verification.models import VerificationApplication, VerificationDecision
+from app.modules.verification.models import (
+    VerificationApplication,
+    VerificationApplicationDocument,
+    VerificationDecision,
+)
 
 TEST_DATABASE_URL = os.getenv("ML48_TEST_DATABASE_URL")
 BASE_PATH = "/api/v1/admin/verification-applications"
@@ -105,6 +111,61 @@ class VerificationAdminPostgreSQLTests(IsolatedAsyncioTestCase):
             await self.session.flush()
         return user
 
+    async def test_verification_pdf_owner_and_cross_user_download(self):
+        other = await self._create_user("PV07 synthetic other applicant")
+        other_application = VerificationApplication(
+            user_id=other.id, role="doctor", registration_number="PV07-SYNTHETIC", status="pending"
+        )
+        self.session.add(other_application)
+        await self.session.flush()
+        docs = []
+        for owner, application in ((self.applicant, self.application), (other, other_application)):
+            doc = Document(
+                owner_user_id=owner.id,
+                uploaded_by=owner.id,
+                patient_user_id=None,
+                source=RecordSource.DOCTOR,
+                document_type="verification_evidence",
+                original_filename="synthetic.pdf",
+                storage_key=f"test/{uuid4()}",
+                media_type="application/pdf",
+                byte_size=18,
+            )
+            self.session.add(doc)
+            await self.session.flush()
+            self.session.add(
+                VerificationApplicationDocument(
+                    application_id=application.id, document_id=doc.id, attached_by=owner.id
+                )
+            )
+            docs.append(doc)
+        await self.session.flush()
+        pdf = b"%PDF-1.4\nPV07\n%%EOF"
+        with TemporaryDirectory(prefix="pv07_") as directory:
+            path = Path(directory) / "synthetic.pdf"
+            path.write_bytes(pdf)
+            with patch(
+                "app.modules.documents.router.storage.get_download_path", return_value=path
+            ) as storage:
+                for owner, outsider, doc in (
+                    (self.applicant, other, docs[0]),
+                    (other, self.applicant, docs[1]),
+                ):
+                    self.actor = owner
+                    response = await self.client.get(f"/api/v1/documents/{doc.id}/content")
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(response.content, pdf)
+                    calls = storage.call_count
+                    self.actor = outsider
+                    response = await self.client.get(f"/api/v1/documents/{doc.id}/content")
+                    self.assertEqual(response.status_code, 404, response.text)
+                    self.assertNotEqual(response.content, pdf)
+                    self.assertEqual(storage.call_count, calls)
+                self.actor = self.reviewer
+                response = await self.client.get(f"/api/v1/documents/{docs[0].id}/content")
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.content, pdf)
+
     async def test_approve_persists_application_role_history_and_audit(self):
         response = await self.client.get(
             BASE_PATH,
@@ -119,9 +180,7 @@ class VerificationAdminPostgreSQLTests(IsolatedAsyncioTestCase):
         application = next(
             item for item in response.json()["items"] if item["id"] == str(self.application_id)
         )
-        self.assertEqual(
-            application["applicant_display_name"], self.applicant.display_name
-        )
+        self.assertEqual(application["applicant_display_name"], self.applicant.display_name)
 
         response = await self.client.get(f"{BASE_PATH}/{self.application_id}")
         self.assertEqual(response.status_code, 200, response.text)
@@ -247,9 +306,7 @@ class VerificationAdminPostgreSQLTests(IsolatedAsyncioTestCase):
             "/api/v1/lab-upload-requests",
             json={"laboratory_id": str(organization.id)},
         )
-        self.assertEqual(
-            denied_clinical_access.status_code, 403, denied_clinical_access.text
-        )
+        self.assertEqual(denied_clinical_access.status_code, 403, denied_clinical_access.text)
         self.assertEqual(denied_clinical_access.json()["code"], "FORBIDDEN")
 
         other_user = await self._create_user("ML48 unrelated applicant")
