@@ -18,6 +18,7 @@ from app.modules.medication.models import (
     ScheduleTime,
 )
 from app.modules.notifications.models import Notification
+from app.modules.profiles.models import PatientProfile
 
 REMINDER_HORIZON = timedelta(hours=24)
 MAX_CATCH_UP_DAYS = 31
@@ -34,9 +35,12 @@ def _local_instant(day: date, at: time, zone: ZoneInfo) -> datetime | None:
 
 
 async def _deliver_due_reminders(session: AsyncSession, schedule, now, active_since):
-    has_log = select(MedicationLog.id).where(
-        MedicationLog.dose_occurrence_id == DoseOccurrence.id
-    ).correlate(DoseOccurrence).exists()
+    has_log = (
+        select(MedicationLog.id)
+        .where(MedicationLog.dose_occurrence_id == DoseOccurrence.id)
+        .correlate(DoseOccurrence)
+        .exists()
+    )
     conditions = [
         DoseOccurrence.schedule_id == schedule.id,
         DoseOccurrence.status.in_([DoseStatus.DUE, DoseStatus.UNREPORTED]),
@@ -63,11 +67,13 @@ async def _deliver_due_reminders(session: AsyncSession, schedule, now, active_si
         if snooze_time is None and occurrence.scheduled_for < active_since:
             continue
         if snooze_time is None and await session.scalar(
-            select(Notification.id).where(
+            select(Notification.id)
+            .where(
                 Notification.related_type == "dose_occurrence",
                 Notification.related_id == occurrence.id,
                 Notification.notification_type == "dose_reminder",
-            ).limit(1)
+            )
+            .limit(1)
         ):
             continue
         delivery_slot = (
@@ -185,9 +191,12 @@ async def process_active_schedules(
                 changed += len(inserted.scalars().all())
             schedule.occurrences_generated_through = through
 
-        has_log = select(MedicationLog.id).where(
-            MedicationLog.dose_occurrence_id == DoseOccurrence.id
-        ).correlate(DoseOccurrence).exists()
+        has_log = (
+            select(MedicationLog.id)
+            .where(MedicationLog.dose_occurrence_id == DoseOccurrence.id)
+            .correlate(DoseOccurrence)
+            .exists()
+        )
         due_result = await session.execute(
             update(DoseOccurrence)
             .where(
@@ -221,7 +230,14 @@ async def process_active_schedules(
         )
         if active_since is None or active_since < schedule.confirmed_at:
             active_since = schedule.confirmed_at
-        if schedule.ends_at is None or now < schedule.ends_at:
+        profile = await session.get(PatientProfile, schedule.patient_user_id)
+        preferences = (
+            profile.notification_preferences
+            if profile is not None and isinstance(profile.notification_preferences, dict)
+            else {}
+        )
+        medication_in_app_enabled = preferences.get("medication_in_app", True) is not False
+        if medication_in_app_enabled and (schedule.ends_at is None or now < schedule.ends_at):
             changed += await _deliver_due_reminders(session, schedule, now, active_since)
 
     if changed:
