@@ -27,6 +27,7 @@ class PrescriptionOcrTemplateStorageModelTests(TestCase):
             }.issubset(foreign_keys)
         )
         self.assertIsInstance(table.c.extracted_fields.type, JSONB)
+        self.assertTrue(table.c.extracted_fields.type.none_as_null)
         self.assertEqual(
             [status.value for status in PrescriptionOcrJobStatus],
             ["queued", "processing", "ready_for_review", "failed", "draft_created"],

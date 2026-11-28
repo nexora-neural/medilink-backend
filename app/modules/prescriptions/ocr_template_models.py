@@ -78,7 +78,9 @@ class PrescriptionOcrJobModel(Base):
     status: Mapped[PrescriptionOcrJobStatus] = mapped_column(
         prescription_ocr_job_status_type, nullable=False, server_default=text("'queued'")
     )
-    extracted_fields: Mapped[dict | None] = mapped_column(JSONB)
+    # Python None must be stored as SQL NULL to satisfy the JSON object check;
+    # JSONB's default behavior would serialize it as the JSON value `null`.
+    extracted_fields: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     error_code: Mapped[str | None] = mapped_column(Text)
     resulting_prescription_id: Mapped[UUID | None] = mapped_column(

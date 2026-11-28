@@ -31,11 +31,20 @@ _DOSE_UNIT = (
     r"(?:tablets?|capsules?|pills?|caplets?|patches?|puffs?|drops?|"
     r"suppositories?|lozenges?|mL|ml|mg|mcg|µg|g|units?)"
 )
-_DOSE_DIRECTIVE = re.compile(
-    rf"\b(?:take|use|apply|inject|inhale|instill|insert)\s+"
-    rf"(?P<dose>{_DOSE_AMOUNT}\s+{_DOSE_UNIT})\b",
+_DOSE_QUANTITY = re.compile(
+    rf"\b{_DOSE_AMOUNT}\s+{_DOSE_UNIT}(?![\w/])(?!\s*(?:/|per\b))",
     re.IGNORECASE,
 )
+_DOSE_DIRECTIVE = re.compile(
+    rf"\b(?:take|use|apply|inject|inhale|instill|insert)\s+"
+    rf"(?P<dose>{_DOSE_AMOUNT}\s+{_DOSE_UNIT})(?![\w/])(?!\s*(?:/|per\b))",
+    re.IGNORECASE,
+)
+_DOSE_DIRECTIVE_START = re.compile(
+    r"\b(?:take|use|apply|inject|inhale|instill|insert)\b",
+    re.IGNORECASE,
+)
+_MULTI_STEP_DOSE = re.compile(r"\b(?:then|followed\s+by|alternating)\b", re.IGNORECASE)
 _PRESCRIBER = re.compile(r"(?im)^\s*(?:prescriber|doctor)\s*:\s*(?:dr\.?\s*)?(.+?)\s*$")
 _DOCTOR_LINE = re.compile(r"(?im)^\s*dr\.?\s+([A-Z][A-Za-z .'-]{1,120})\s*$")
 _ITEM_LINE = re.compile(
@@ -208,7 +217,20 @@ def extract_fields(recognized_text: str) -> dict:
         if frequency_match is None:
             continue
         frequency = re.sub(r"\s+", " ", frequency_match.group(0)).strip()
-        dose_match = _DOSE_DIRECTIVE.search(directions)
+        # Only map a dose when the directions contain exactly one clear dose
+        # and one administration directive. This avoids truncating compound
+        # units (for example, 1 mg/kg) and silently losing later dose steps.
+        dose_quantities = list(_DOSE_QUANTITY.finditer(directions))
+        dose_directives = list(_DOSE_DIRECTIVE_START.finditer(directions))
+        dose_matches = list(_DOSE_DIRECTIVE.finditer(directions))
+        dose_match = (
+            dose_matches[0]
+            if (
+                len(dose_quantities) == len(dose_directives) == len(dose_matches) == 1
+                and _MULTI_STEP_DOSE.search(directions) is None
+            )
+            else None
+        )
         dose = re.sub(r"\s+", " ", dose_match.group("dose")).strip() if dose_match else None
         duration_match = _DURATION.search(directions)
         duration = int(duration_match.group(1)) if duration_match else None

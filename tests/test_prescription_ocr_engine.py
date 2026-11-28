@@ -43,6 +43,28 @@ def _printed_page():
     return image
 
 
+class PrescriptionOcrParserTests(unittest.TestCase):
+    def test_compound_weight_based_dose_is_left_for_patient_review(self):
+        directions = (
+            "Take 1 mg/kg once a day for 5 days",
+            "Take 1 mg / kg once a day for 5 days",
+        )
+        for instruction in directions:
+            with self.subTest(instruction=instruction):
+                result = extract_fields(f"Amoxicillin 500 mg - {instruction}")
+                self.assertIsNone(result["items"][0]["dose_text"])
+
+    def test_multiple_dose_steps_are_left_for_patient_review(self):
+        directions = (
+            "Take 1 tablet for 3 days, then 2 tablets three times a day",
+            "Take 1 tablet three times a day for 3 days, then increase to 2 daily",
+        )
+        for instruction in directions:
+            with self.subTest(instruction=instruction):
+                result = extract_fields(f"Amoxicillin 500 mg - {instruction}")
+                self.assertIsNone(result["items"][0]["dose_text"])
+
+
 @unittest.skipUnless(
     shutil.which("tesseract") and shutil.which("pdftoppm"), "OCR tools unavailable"
 )
