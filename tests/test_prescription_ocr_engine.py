@@ -64,6 +64,13 @@ class PrescriptionOcrParserTests(unittest.TestCase):
                 result = extract_fields(f"Amoxicillin 500 mg - {instruction}")
                 self.assertIsNone(result["items"][0]["dose_text"])
 
+    def test_partially_matched_fractional_dose_is_left_for_patient_review(self):
+        result = extract_fields(
+            "Amoxicillin 500 mg - Take 1 tablet and a half once daily"
+        )
+
+        self.assertIsNone(result["items"][0]["dose_text"])
+
 
 @unittest.skipUnless(
     shutil.which("tesseract") and shutil.which("pdftoppm"), "OCR tools unavailable"

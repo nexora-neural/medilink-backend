@@ -45,6 +45,11 @@ _DOSE_DIRECTIVE_START = re.compile(
     re.IGNORECASE,
 )
 _MULTI_STEP_DOSE = re.compile(r"\b(?:then|followed\s+by|alternating)\b", re.IGNORECASE)
+_PARTIAL_DOSE_ADDITION = re.compile(
+    r"\b(?:and|plus)\s+(?:(?:a|an)\s+)?"
+    r"(?:half|quarter|\d+(?:\.\d+)?|one|two|three|four|five|six)\b",
+    re.IGNORECASE,
+)
 _PRESCRIBER = re.compile(r"(?im)^\s*(?:prescriber|doctor)\s*:\s*(?:dr\.?\s*)?(.+?)\s*$")
 _DOCTOR_LINE = re.compile(r"(?im)^\s*dr\.?\s+([A-Z][A-Za-z .'-]{1,120})\s*$")
 _ITEM_LINE = re.compile(
@@ -228,6 +233,7 @@ def extract_fields(recognized_text: str) -> dict:
             if (
                 len(dose_quantities) == len(dose_directives) == len(dose_matches) == 1
                 and _MULTI_STEP_DOSE.search(directions) is None
+                and _PARTIAL_DOSE_ADDITION.search(directions) is None
             )
             else None
         )
