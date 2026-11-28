@@ -13,11 +13,12 @@ from sqlalchemy import select
 
 from app.database.session import get_session
 from app.modules.audit.models import AuditEvent
+from app.modules.documents.models import Document
 from app.modules.integrations import report_service
 from app.modules.integrations.auth import get_active_integration_client
-from app.modules.integrations.models import IntegrationClient
+from app.modules.integrations.models import IntegrationClient, IntegrationSubmission
 from app.modules.integrations.report_router import router
-from app.modules.laboratory.models import LabUploadRequest, Report
+from app.modules.laboratory.models import LabUploadRequest, Report, ReportIdentity
 from tests.test_report_api_postgres import ReportPostgresTests
 
 
@@ -44,6 +45,7 @@ class IntegrationReportPostgresTests(ReportPostgresTests):
         )
         self.db.add_all([lab_request, integration])
         await self.db.flush()
+        self.upload_request_id = lab_request.id
         self.integration_id = integration.id
         await self.db.commit()
         app = FastAPI()
@@ -67,7 +69,7 @@ class IntegrationReportPostgresTests(ReportPostgresTests):
         )
         self.addAsyncCleanup(self.integration_http.aclose)
 
-    async def send_report(self, *, key, external, report_id=None, **fields):
+    async def send_report(self, *, key, external, report_id=None, file_content=None, **fields):
         data = {
             "request_token": self.token,
             "external_report_id": external,
@@ -81,7 +83,13 @@ class IntegrationReportPostgresTests(ReportPostgresTests):
         return await self.integration_http.post(
             path,
             data=data,
-            files={"file": ("test.pdf", self.pdf, "application/pdf")},
+            files={
+                "file": (
+                    "test.pdf",
+                    self.pdf if file_content is None else file_content,
+                    "application/pdf",
+                )
+            },
             headers={"Idempotency-Key": key},
         )
 
@@ -107,6 +115,42 @@ class IntegrationReportPostgresTests(ReportPostgresTests):
         self.assertEqual(corrected.status_code, 201, corrected.text)
         old = await self.db.get(Report, UUID(first.json()["report_id"]))
         new = await self.db.get(Report, UUID(corrected.json()["report_id"]))
+        identity = await self.db.get(ReportIdentity, old.report_identity_id)
+        initial_submission = await self.db.scalar(
+            select(IntegrationSubmission).where(IntegrationSubmission.report_id == old.id)
+        )
+        correction_submission = await self.db.scalar(
+            select(IntegrationSubmission).where(IntegrationSubmission.report_id == new.id)
+        )
+        original_document = await self.db.get(Document, old.document_id)
+        corrected_document = await self.db.get(Document, new.document_id)
+        submissions = (
+            await self.db.scalars(
+                select(AuditEvent).where(
+                    AuditEvent.action == "integration.report_submitted",
+                    AuditEvent.target_id.in_([old.id, new.id]),
+                )
+            )
+        ).all()
+
+        self.assertEqual(old.patient_user_id, self.patient_id)
+        self.assertEqual(old.laboratory_id, self.lab_id)
+        self.assertEqual(old.upload_request_id, self.upload_request_id)
+        self.assertEqual(identity.patient_user_id, self.patient_id)
+        self.assertEqual(identity.laboratory_id, self.lab_id)
+        self.assertEqual(identity.initial_upload_request_id, self.upload_request_id)
+        self.assertEqual(identity.lab_reference, "ML139-REF")
+        self.assertEqual(initial_submission.client_id, self.integration_id)
+        self.assertEqual(initial_submission.upload_request_id, self.upload_request_id)
+        self.assertEqual(correction_submission.client_id, self.integration_id)
+        self.assertEqual(correction_submission.upload_request_id, self.upload_request_id)
+        self.assertEqual(new.patient_user_id, old.patient_user_id)
+        self.assertEqual(new.laboratory_id, old.laboratory_id)
+        self.assertEqual(new.report_identity_id, old.report_identity_id)
+        self.assertIsNone(new.upload_request_id)
+        self.assertEqual(corrected_document.patient_user_id, original_document.patient_user_id)
+        self.assertEqual(corrected_document.supersedes_id, original_document.id)
+        self.assertEqual({event.target_id for event in submissions}, {old.id, new.id})
         self.assertEqual(old.status, "superseded")
         self.assertEqual(new.supersedes_id, old.id)
         self.assertEqual(new.correction_reason, "Synthetic correction")
@@ -140,6 +184,65 @@ class IntegrationReportPostgresTests(ReportPostgresTests):
         )
         self.assertEqual(no_reason.status_code, 422, no_reason.text)
 
+    async def test_invalid_file_bytes_do_not_consume_request_or_publish(self):
+        response = await self.send_report(
+            key="ml139-invalid-file",
+            external="invalid-file",
+            file_content=b"not a readable PDF",
+        )
+        self.assertEqual(response.status_code, 415, response.text)
+        self.assertEqual(response.json()["code"], "UNSUPPORTED_FILE_TYPE")
+        request = await self.db.get(LabUploadRequest, self.upload_request_id)
+        self.assertEqual(request.status, "active")
+        self.assertEqual(
+            await self.db.scalar(
+                select(IntegrationSubmission.id).where(
+                    IntegrationSubmission.external_report_id == "invalid-file"
+                )
+            ),
+            None,
+        )
+        self.assertEqual(
+            await self.db.scalar(
+                select(Report.id).where(Report.patient_user_id == self.patient_id)
+            ),
+            None,
+        )
+
+    async def test_other_laboratory_cannot_use_upload_request(self):
+        other_client = IntegrationClient(
+            organization_id=self.other_lab_id,
+            name="Other synthetic laboratory client",
+            credential_hash=hashlib.sha256(uuid4().bytes).hexdigest(),
+            scopes=["reports:write"],
+            status="active",
+            expires_at=datetime.now(UTC) + timedelta(days=1),
+            created_by=self.other_lab_user_id,
+        )
+        self.db.add(other_client)
+        await self.db.flush()
+        self.integration_id = other_client.id
+        await self.db.commit()
+
+        response = await self.send_report(key="ml139-wrong-lab", external="wrong-lab")
+        self.assertEqual(response.status_code, 403, response.text)
+        request = await self.db.get(LabUploadRequest, self.upload_request_id)
+        self.assertEqual(request.status, "active")
+        self.assertEqual(
+            await self.db.scalar(
+                select(IntegrationSubmission.id).where(
+                    IntegrationSubmission.external_report_id == "wrong-lab"
+                )
+            ),
+            None,
+        )
+        self.assertEqual(
+            await self.db.scalar(
+                select(Report.id).where(Report.patient_user_id == self.patient_id)
+            ),
+            None,
+        )
+
     async def test_storage_failure_rolls_back_request_and_report(self):
         with patch.object(
             report_service.storage,
@@ -149,6 +252,7 @@ class IntegrationReportPostgresTests(ReportPostgresTests):
         ):
             response = await self.send_report(key="ml139-failure", external="failure")
         self.assertEqual(response.status_code, 500, response.text)
+        self.assertNotIn("synthetic storage failure", response.text)
         request = await self.db.scalar(
             select(LabUploadRequest).where(
                 LabUploadRequest.request_token_hash
@@ -194,6 +298,7 @@ class IntegrationReportPostgresTests(ReportPostgresTests):
         ):
             response = await self.send_report(key="ml139-audit-fail", external="audit-fail")
         self.assertEqual(response.status_code, 500, response.text)
+        self.assertNotIn("synthetic audit failure", response.text)
         self.storage["delete"].assert_awaited_once()
         request = await self.db.scalar(
             select(LabUploadRequest).where(
