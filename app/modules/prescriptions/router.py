@@ -4,7 +4,9 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.session import get_session
@@ -14,7 +16,7 @@ from app.modules.identity.request_limits import (
     require_authenticated_rate_limit,
     require_upload_rate_limit,
 )
-from app.modules.prescriptions import ocr_service, service
+from app.modules.prescriptions import lifecycle, ocr_service, service
 from app.modules.prescriptions.schemas import (
     ClinicalWriteErrorResponse,
     MedicineInput,
@@ -29,6 +31,8 @@ from app.modules.prescriptions.schemas import (
     PrescriptionOcrJobRead,
     PrescriptionOcrJobReadPage,
     PrescriptionOcrRetryInput,
+    PrescriptionReasonInput,
+    PrescriptionVersionInput,
 )
 
 router = APIRouter(tags=["Prescriptions"])
@@ -413,9 +417,7 @@ async def create_prescription_ocr_job(
     response: Response,
     session: SessionDep,
     current_user: UserDep,
-    idempotency_key: Annotated[
-        str, Header(alias="Idempotency-Key", min_length=8, max_length=128)
-    ],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
 ) -> PrescriptionOcrJobRead:
     _reject_unknown_query(request, set())
     result = await ocr_service.create_job(
@@ -447,9 +449,7 @@ async def list_prescription_ocr_jobs(
     current_user: UserDep,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
-    status_filter: Annotated[
-        str | None, Query(alias="status", pattern=_OCR_STATUS_PATTERN)
-    ] = None,
+    status_filter: Annotated[str | None, Query(alias="status", pattern=_OCR_STATUS_PATTERN)] = None,
 ) -> PrescriptionOcrJobReadPage:
     _reject_unknown_query(request, {"page", "page_size", "status"})
     result = await ocr_service.list_jobs(
@@ -542,9 +542,7 @@ async def create_prescription_ocr_draft(
     response: Response,
     session: SessionDep,
     current_user: UserDep,
-    idempotency_key: Annotated[
-        str, Header(alias="Idempotency-Key", min_length=8, max_length=128)
-    ],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
 ) -> PrescriptionOcrDraftCreated:
     _reject_unknown_query(request, set())
     result = await ocr_service.create_reviewed_draft(
@@ -555,6 +553,161 @@ async def create_prescription_ocr_draft(
         job_id=job_id,
         payload=payload,
         idempotency_key=idempotency_key,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+class _LifecycleRoute(APIRoute):
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def handle(request: Request):
+            try:
+                return await handler(request)
+            except RequestValidationError as exc:
+                if any(error.get("type") == "json_invalid" for error in exc.errors()):
+                    raise service.confirmation_error(
+                        request, 400, "INVALID_JSON", "Request body must be valid JSON."
+                    ) from None
+                raise
+
+        return handle
+
+
+# ML-154 uses the existing patient/doctor access policy and response projection.
+def _lifecycle_expected_version(request: Request, if_match: str | None) -> int | None:
+    import re
+
+    if request.query_params:
+        raise service.confirmation_error(
+            request,
+            422,
+            "VALIDATION_ERROR",
+            "Query parameters are not allowed.",
+            {"query": ["Unknown query parameter."]},
+        )
+    if if_match is None:
+        return None
+    if not re.fullmatch(r'(?:[1-9][0-9]{0,9}|"[1-9][0-9]{0,9}")', if_match):
+        raise service.confirmation_error(
+            request,
+            422,
+            "VALIDATION_ERROR",
+            "If-Match must contain a positive prescription version.",
+        )
+    return int(if_match.strip('"'))
+
+
+def _version_endpoint(action):
+    async def endpoint(
+        prescription_id: UUID,
+        payload: PrescriptionVersionInput,
+        request: Request,
+        response: Response,
+        session: SessionDep,
+        current_user: UserDep,
+        if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    ) -> PrescriptionDetail:
+        expected = _lifecycle_expected_version(request, if_match)
+        result = await lifecycle.create_version(
+            session=session,
+            user=current_user,
+            request=request,
+            prescription_id=prescription_id,
+            payload=payload,
+            action=action,
+            expected_version=expected,
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return result
+
+    return endpoint
+
+
+def _status_endpoint(action):
+    async def endpoint(
+        prescription_id: UUID,
+        payload: PrescriptionReasonInput,
+        request: Request,
+        response: Response,
+        session: SessionDep,
+        current_user: UserDep,
+        if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    ) -> PrescriptionDetail:
+        expected = _lifecycle_expected_version(request, if_match)
+        result = await lifecycle.change_status(
+            session=session,
+            user=current_user,
+            request=request,
+            prescription_id=prescription_id,
+            reason=payload.reason,
+            action=action,
+            expected_version=expected,
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return result
+
+    return endpoint
+
+
+for _path, _action, _operation in [
+    ("versions", "version", "medilink_051"),
+    ("renewals", "renewal", "medilink_052"),
+    ("reissues", "reissue", "medilink_053"),
+    ("cancel", "cancel", "medilink_054"),
+    ("discontinue", "discontinue", "medilink_055"),
+    ("complete", "complete", "medilink_056"),
+]:
+    router.add_api_route(
+        "/prescriptions/{prescription_id}/" + _path,
+        _version_endpoint(_action)
+        if _action in {"version", "renewal", "reissue"}
+        else _status_endpoint(_action),
+        methods=["POST"],
+        route_class_override=_LifecycleRoute,
+        operation_id=_operation,
+        response_model=PrescriptionDetail,
+        status_code=201,
+        summary=f"Prescription {_action}",
+        dependencies=[Depends(require_authenticated_rate_limit)],
+        responses={
+            code: {"model": ClinicalWriteErrorResponse}
+            for code in (400, 401, 403, 404, 409, 422, 429, 500, 503)
+        },
+    )
+
+
+@router.get(
+    "/prescriptions/{prescription_id}/history",
+    response_model=PrescriptionDetailPage,
+    operation_id="medilink_057",
+    dependencies=[Depends(require_authenticated_rate_limit)],
+)
+async def get_prescription_history(
+    prescription_id: UUID,
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    current_user: UserDep,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> PrescriptionDetailPage:
+    if set(request.query_params) - {"page", "page_size"}:
+        raise service.confirmation_error(
+            request,
+            422,
+            "VALIDATION_ERROR",
+            "Unknown query parameter.",
+            {"query": ["Unknown query parameter."]},
+        )
+    result = await lifecycle.history(
+        session=session,
+        user=current_user,
+        request=request,
+        prescription_id=prescription_id,
+        page=page,
+        page_size=page_size,
     )
     response.headers["Cache-Control"] = "no-store"
     return result

@@ -27,6 +27,7 @@ from app.modules.prescriptions.core_models import (
     PrescriptionReviewStatus,
     PrescriptionStatus,
 )
+from app.modules.prescriptions.lifecycle_models import PrescriptionLifecycleEvent
 from app.modules.prescriptions.review_models import PrescriptionReview
 from app.modules.prescriptions.schemas import (
     MedicineInput,
@@ -141,9 +142,13 @@ async def confirm_patient_draft(
             payload=payload,
         )
 
+        from app.modules.prescriptions.lifecycle import patient_replacement
+
+        now = datetime.now(UTC)
+        await patient_replacement(session, prescription, user, request, now)
         previous_version = prescription.version
         prescription.status = PrescriptionStatus.ACTIVE
-        prescription.issued_at = datetime.now(UTC)
+        prescription.issued_at = now
         prescription.updated_at = prescription.issued_at
         prescription.version += 1
         await session.flush()
@@ -490,14 +495,6 @@ async def replace_prescription_draft(
             payload.items,
         )
 
-        # Keep review evidence, but require a fresh review of edited content.
-        reviews_result = await session.scalars(
-            select(PrescriptionReview)
-            .where(PrescriptionReview.prescription_id == prescription.id)
-            .order_by(PrescriptionReview.reviewed_at)
-        )
-        reviews = list(reviews_result.all())
-
         # Retain review rows, but invalidate approval of the previous content.
         prescription.review_status = PrescriptionReviewStatus.NOT_REVIEWED
         prescription.reviewed_by = None
@@ -518,11 +515,7 @@ async def replace_prescription_draft(
             },
         )
 
-        result = PrescriptionDetail(
-            prescription=prescription,
-            items=items,
-            reviews=reviews,
-        )
+        result = await build_prescription_detail(session, prescription)
 
         await session.commit()
         return result
@@ -562,10 +555,20 @@ async def build_prescription_detail(
         ).all()
     )
 
+    lifecycle_events = list(
+        (
+            await session.scalars(
+                select(PrescriptionLifecycleEvent)
+                .where(PrescriptionLifecycleEvent.prescription_id == prescription.id)
+                .order_by(PrescriptionLifecycleEvent.created_at, PrescriptionLifecycleEvent.id)
+            )
+        ).all()
+    )
     return PrescriptionDetail(
         prescription=prescription,
         items=items,
         reviews=reviews,
+        lifecycle_events=lifecycle_events,
     )
 
 
@@ -1048,38 +1051,10 @@ async def issue_prescription(
         previous_version = prescription.version
         now = datetime.now(UTC)
 
-        previous_version = prescription.version
-        now = datetime.now(UTC)
-
         if predecessor is not None:
-            predecessor_status = getattr(predecessor.status, "value", predecessor.status)
-            predecessor_version = predecessor.version
+            from app.modules.prescriptions.lifecycle import supersede
 
-            predecessor.status = PrescriptionStatus.SUPERSEDED
-            predecessor.updated_at = now
-            predecessor.version += 1
-
-            await repository.cancel_superseded_medication(
-                session,
-                prescription_id=predecessor.id,
-                now=now,
-            )
-
-            await append_event(
-                session,
-                actor_user_id=user.id,
-                action="prescription.superseded",
-                target_type="prescriptions",
-                target_id=predecessor.id,
-                outcome="success",
-                request_id=request_id,
-                metadata={
-                    "previous_status": predecessor_status,
-                    "status": "superseded",
-                    "previous_version": predecessor_version,
-                    "new_version": predecessor.version,
-                },
-            )
+            await supersede(session, predecessor, prescription, user, request, now)
 
         prescription.status = PrescriptionStatus.ACTIVE
         prescription.issued_at = now

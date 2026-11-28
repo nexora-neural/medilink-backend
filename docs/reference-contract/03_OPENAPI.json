@@ -6568,7 +6568,7 @@
           "Prescriptions"
         ],
         "summary": "Create linked versions",
-        "description": "Allowed actor: Patient: own record for patient-source versions only; Verified Doctor: current category grant; clinical writes also require patient-approved consultation. Returns new draft linked by previous_prescription_id; reason/action persisted. Doctor renewals/reissues require separate review and issue. Reissue of patient entry makes a separate doctor-source order. Issue version atomically supersedes predecessor and cancels obsolete future doses.",
+        "description": "Allowed actor: Patient: own record for patient-source versions only; Verified Doctor: current category grant; clinical writes also require patient-approved consultation. Returns new draft linked by previous_prescription_id; reason/action persisted. Doctor renewals/reissues require separate review and issue. Reissue of patient entry makes a separate doctor-source order. Issue version atomically supersedes predecessor and cancels obsolete future doses. ML-154 implementation: retained private lifecycle_events in details/history; see docs/api/prescription-lifecycle.md for source permissions, states and retry behavior.",
         "security": [
           {
             "FirebaseBearer": []
@@ -6664,6 +6664,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Identity or quota store unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "x-allowed-actors": "Patient: own record for patient-source versions only; Verified Doctor: current category grant; clinical writes also require patient-approved consultation",
@@ -6676,6 +6686,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional positive version, bare or quoted; stale version returns 409."
           }
         ],
         "requestBody": {
@@ -6697,7 +6716,7 @@
           "Prescriptions"
         ],
         "summary": "Create linked renewals",
-        "description": "Allowed actor: Patient: own record for patient-source versions only; Verified Doctor: current category grant; clinical writes also require patient-approved consultation. Returns new draft linked by previous_prescription_id; reason/action persisted. Doctor renewals/reissues require separate review and issue. Reissue of patient entry makes a separate doctor-source order. Issue version atomically supersedes predecessor and cancels obsolete future doses.",
+        "description": "Allowed actor: Patient: own record for patient-source versions only; Verified Doctor: current category grant; clinical writes also require patient-approved consultation. Returns new draft linked by previous_prescription_id; reason/action persisted. Doctor renewals/reissues require separate review and issue. Reissue of patient entry makes a separate doctor-source order. Issue version atomically supersedes predecessor and cancels obsolete future doses. ML-154 implementation: retained private lifecycle_events in details/history; see docs/api/prescription-lifecycle.md for source permissions, states and retry behavior.",
         "security": [
           {
             "FirebaseBearer": []
@@ -6793,6 +6812,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Identity or quota store unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "x-allowed-actors": "Patient: own record for patient-source versions only; Verified Doctor: current category grant; clinical writes also require patient-approved consultation",
@@ -6805,6 +6834,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional positive version, bare or quoted; stale version returns 409."
           }
         ],
         "requestBody": {
@@ -6826,7 +6864,7 @@
           "Prescriptions"
         ],
         "summary": "Create linked reissues",
-        "description": "Allowed actor: Patient: own record for patient-source versions only; Verified Doctor: current category grant; clinical writes also require patient-approved consultation. Returns new draft linked by previous_prescription_id; reason/action persisted. Doctor renewals/reissues require separate review and issue. Reissue of patient entry makes a separate doctor-source order. Issue version atomically supersedes predecessor and cancels obsolete future doses.",
+        "description": "Allowed actor: Patient: own record for patient-source versions only; Verified Doctor: current category grant; clinical writes also require patient-approved consultation. Returns new draft linked by previous_prescription_id; reason/action persisted. Doctor renewals/reissues require separate review and issue. Reissue of patient entry makes a separate doctor-source order. Issue version atomically supersedes predecessor and cancels obsolete future doses. ML-154 implementation: retained private lifecycle_events in details/history; see docs/api/prescription-lifecycle.md for source permissions, states and retry behavior.",
         "security": [
           {
             "FirebaseBearer": []
@@ -6922,6 +6960,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Identity or quota store unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "x-allowed-actors": "Patient: own record for patient-source versions only; Verified Doctor: current category grant; clinical writes also require patient-approved consultation",
@@ -6934,6 +6982,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional positive version, bare or quoted; stale version returns 409."
           }
         ],
         "requestBody": {
@@ -6955,7 +7012,7 @@
           "Prescriptions"
         ],
         "summary": "Cancel prescription",
-        "description": "Allowed actor: Owner Doctor with current consultation permission; Patient only for own patient-source personal record. Explicit status transition; source-specific ownership checked. Cancel future occurrences and invalidate pharmacy access for cancelled/discontinued prescriptions. No rewriting past logs.",
+        "description": "Allowed actor: Owner Doctor with current consultation permission; Patient only for own patient-source personal record. Explicit status transition; source-specific ownership checked. Cancel future occurrences and invalidate pharmacy access for cancelled/discontinued prescriptions. No rewriting past logs. ML-154 implementation: retained private lifecycle_events in details/history; see docs/api/prescription-lifecycle.md for source permissions, states and retry behavior.",
         "security": [
           {
             "FirebaseBearer": []
@@ -7051,6 +7108,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Identity or quota store unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "x-allowed-actors": "Owner Doctor with current consultation permission; Patient only for own patient-source personal record",
@@ -7063,6 +7130,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional positive version, bare or quoted; stale version returns 409."
           }
         ],
         "requestBody": {
@@ -7084,7 +7160,7 @@
           "Prescriptions"
         ],
         "summary": "Discontinue prescription",
-        "description": "Allowed actor: Owner Doctor with current consultation permission; Patient only for own patient-source personal record. Explicit status transition; source-specific ownership checked. Cancel future occurrences and invalidate pharmacy access for cancelled/discontinued prescriptions. No rewriting past logs.",
+        "description": "Allowed actor: Owner Doctor with current consultation permission; Patient only for own patient-source personal record. Explicit status transition; source-specific ownership checked. Cancel future occurrences and invalidate pharmacy access for cancelled/discontinued prescriptions. No rewriting past logs. ML-154 implementation: retained private lifecycle_events in details/history; see docs/api/prescription-lifecycle.md for source permissions, states and retry behavior.",
         "security": [
           {
             "FirebaseBearer": []
@@ -7180,6 +7256,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Identity or quota store unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "x-allowed-actors": "Owner Doctor with current consultation permission; Patient only for own patient-source personal record",
@@ -7192,6 +7278,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional positive version, bare or quoted; stale version returns 409."
           }
         ],
         "requestBody": {
@@ -7213,7 +7308,7 @@
           "Prescriptions"
         ],
         "summary": "Complete prescription",
-        "description": "Allowed actor: Owner Doctor with current consultation permission; Patient only for own patient-source personal record. Explicit status transition; source-specific ownership checked. Cancel future occurrences and invalidate pharmacy access for cancelled/discontinued prescriptions. No rewriting past logs.",
+        "description": "Allowed actor: Owner Doctor with current consultation permission; Patient only for own patient-source personal record. Explicit status transition; source-specific ownership checked. Cancel future occurrences and invalidate pharmacy access for cancelled/discontinued prescriptions. No rewriting past logs. ML-154 implementation: retained private lifecycle_events in details/history; see docs/api/prescription-lifecycle.md for source permissions, states and retry behavior.",
         "security": [
           {
             "FirebaseBearer": []
@@ -7309,6 +7404,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Identity or quota store unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "x-allowed-actors": "Owner Doctor with current consultation permission; Patient only for own patient-source personal record",
@@ -7321,6 +7426,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional positive version, bare or quoted; stale version returns 409."
           }
         ],
         "requestBody": {
@@ -7342,7 +7456,7 @@
           "Prescriptions"
         ],
         "summary": "Read linked prescription versions",
-        "description": "Allowed actor: Patient: own record or Verified Doctor: current category grant; clinical writes also require patient-approved consultation. ",
+        "description": "Allowed actor: Patient: own record or Verified Doctor: current category grant; clinical writes also require patient-approved consultation.  ML-154 implementation: retained private lifecycle_events in details/history; see docs/api/prescription-lifecycle.md for source permissions, states and retry behavior.",
         "security": [
           {
             "FirebaseBearer": []
@@ -7431,6 +7545,16 @@
           },
           "500": {
             "description": "Unexpected failure with safe request_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Identity or quota store unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -20800,7 +20924,8 @@
             "minItems": 1,
             "items": {
               "$ref": "#/components/schemas/PrescriptionItemInput"
-            }
+            },
+            "maxItems": 100
           },
           "reason": {
             "type": "string",
@@ -20853,6 +20978,13 @@
             "items": {
               "$ref": "#/components/schemas/PrescriptionReviewsRead"
             }
+          },
+          "lifecycle_events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrescriptionLifecycleRead"
+            },
+            "description": "Authorized retained private lifecycle reasons and action lineage; default empty."
           }
         },
         "required": [
@@ -23550,6 +23682,77 @@
           "reference"
         ],
         "title": "FhirReference"
+      },
+      "PrescriptionLifecycleRead": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "prescription_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "related_prescription_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "actor_user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "previous_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "previous_version": {
+            "type": "integer"
+          },
+          "new_version": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "prescription_id",
+          "related_prescription_id",
+          "actor_user_id",
+          "action",
+          "reason",
+          "previous_status",
+          "status",
+          "previous_version",
+          "new_version",
+          "created_at"
+        ],
+        "additionalProperties": false
       }
     }
   }

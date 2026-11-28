@@ -2325,3 +2325,26 @@ The selector and client creation use the same server eligibility predicate. A la
   with a null reference; current detail/list responses read the persisted identity.
 - No database migration, ownership rule, request-consumption rule or notification
   deduplication change is introduced by this response extension.
+
+
+## ML-154 implementation — lifecycle and linked history
+
+The seven lifecycle/version routes are implemented as documented in
+[Prescription lifecycle](../api/prescription-lifecycle.md). Version input is a
+complete 1–100-item draft with a nonblank reason. Creation retains an existing
+predecessor without stopping it; explicit patient confirmation/doctor issue of
+the successor atomically supersedes that predecessor. Only explicit doctor
+reissue promotes patient evidence into a **separate** doctor-source draft.
+The original patient evidence keeps its source and verification state.
+
+An optional positive-integer `If-Match` protects each mutation. POST query fields
+are rejected; status retries are state-idempotent for the same actor/action/reason.
+The detail/history projection adds `lifecycle_events` (default empty) with
+private reason, actor, action, prior/current status/version, related prescription
+and timestamp. These fields are authorized clinical history, not generic audit
+metadata. The new prescription_lifecycle_events table retains action history.
+Only active orders can terminate; active/completed orders may create review-required
+linked drafts. Terminal/superseded records never reopen. History reads require
+current category read permission; doctor writes require current consultation
+permission. Review the explicit state matrix and stored-consultation requirement
+in the implementation notes when integrating the UI.

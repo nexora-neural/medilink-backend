@@ -19,6 +19,7 @@ from app.modules.operations import models as _operations_models
 from app.modules.organizations import models as _organizations_models
 from app.modules.organizations.models import Organization, OrganizationMembership
 from app.modules.prescriptions import core_models as _prescription_core_models
+from app.modules.prescriptions import lifecycle_models as _prescription_lifecycle_models
 from app.modules.prescriptions import models as _prescriptions_models
 from app.modules.prescriptions import ocr_template_models as _prescription_ocr_template_models
 from app.modules.prescriptions import review_models as _prescription_review_models
