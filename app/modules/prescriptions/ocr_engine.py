@@ -45,11 +45,7 @@ _DOSE_DIRECTIVE_START = re.compile(
     re.IGNORECASE,
 )
 _MULTI_STEP_DOSE = re.compile(r"\b(?:then|followed\s+by|alternating)\b", re.IGNORECASE)
-_PARTIAL_DOSE_ADDITION = re.compile(
-    r"\b(?:and|plus)\s+(?:(?:a|an)\s+)?"
-    r"(?:(?:half|quarter|\d+(?:\.\d+)?|one|two|three|four|five|six)\b|[½¼¾⅓⅔])",
-    re.IGNORECASE,
-)
+_DOSE_ADDITION_CUE = re.compile(r"\b(?:and|plus)\b", re.IGNORECASE)
 _NEGATED_DOSE_DIRECTIVE = re.compile(
     r"\b(?:(?:do|does|did)\s+not|don't|doesn't|didn't|never|not\s+to|"
     r"should\s+not|must\s+not)\s+(?:take|use|apply|inject|inhale|instill|insert)\b"
@@ -239,11 +235,17 @@ def extract_fields(recognized_text: str) -> dict:
             if (
                 len(dose_quantities) == len(dose_directives) == len(dose_matches) == 1
                 and _MULTI_STEP_DOSE.search(directions) is None
-                and _PARTIAL_DOSE_ADDITION.search(directions) is None
                 and _NEGATED_DOSE_DIRECTIVE.search(directions) is None
             )
             else None
         )
+        # Any additive connector after the recognized amount could introduce
+        # a second amount that OCR only partially recognized (for example,
+        # "Take 1 tablet and ½" being read as "Take 1 tablet and %"). Leave
+        # such cases for the required patient review instead of pre-filling
+        # only the first part of a dose.
+        if dose_match and _DOSE_ADDITION_CUE.search(directions[dose_match.end() :]):
+            dose_match = None
         dose = re.sub(r"\s+", " ", dose_match.group("dose")).strip() if dose_match else None
         duration_match = _DURATION.search(directions)
         duration = int(duration_match.group(1)) if duration_match else None

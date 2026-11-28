@@ -27,7 +27,9 @@ def _font():
     return ImageFont.load_default(size=42)
 
 
-def _printed_page():
+def _printed_page(
+    directions: str = "Take 1 capsule three times a day for 5 days",
+):
     image = Image.new("RGB", (1700, 1200), "white")
     draw = ImageDraw.Draw(image)
     for number, line in enumerate(
@@ -36,7 +38,7 @@ def _printed_page():
             "Prescriber: Dr. Jane Example",
             "Start date: 2026-11-28",
             "End date: 2026-12-02",
-            "Amoxicillin 500 mg - Take 1 capsule three times a day for 5 days",
+            f"Amoxicillin 500 mg - {directions}",
         )
     ):
         draw.text((90, 100 + number * 150), line, fill="black", font=_font())
@@ -68,6 +70,7 @@ class PrescriptionOcrParserTests(unittest.TestCase):
         instructions = (
             "Take 1 tablet and a half once daily",
             "Take 1 tablet and ½ once daily",
+            "Take 1 tablet and % once daily",
         )
         for instruction in instructions:
             with self.subTest(instruction=instruction):
@@ -94,10 +97,16 @@ class PrescriptionOcrRealEngineTests(unittest.TestCase):
         self.addCleanup(setattr, settings, "private_upload_dir", self.old_storage)
         Path(settings.private_upload_dir).mkdir(mode=0o700)
 
-    def save_as_private_document(self, extension: str, media_type: str) -> tuple[str, int]:
+    def save_as_private_document(
+        self,
+        extension: str,
+        media_type: str,
+        *,
+        directions: str = "Take 1 capsule three times a day for 5 days",
+    ) -> tuple[str, int]:
         key = uuid4().hex
         target = Path(settings.private_upload_dir) / key
-        image = _printed_page()
+        image = _printed_page(directions)
         if extension == "pdf":
             image.save(target, format="PDF", resolution=300.0)
         else:
@@ -124,6 +133,23 @@ class PrescriptionOcrRealEngineTests(unittest.TestCase):
                 self.assertEqual(fields["items"][0]["dose_text"], "1 capsule")
                 self.assertEqual(fields["items"][0]["frequency"], "three times a day")
                 self.assertNotIn("raw_text", fields)
+
+    def test_real_ocr_does_not_prefill_a_partially_read_additive_dose(self):
+        for directions in (
+            "Take 1 tablet and ½ once daily",
+            "Take 1 tablet and % once daily",
+        ):
+            with self.subTest(directions=directions):
+                key, size = self.save_as_private_document(
+                    "png", "image/png", directions=directions
+                )
+                fields = extract_document_fields(
+                    storage_key=key,
+                    byte_size=size,
+                    media_type="image/png",
+                )
+
+                self.assertIsNone(fields["items"][0]["dose_text"])
 
     def test_dose_comes_from_directions_not_product_strength(self):
         result = extract_fields(
